@@ -74,7 +74,7 @@
     if (isLive) {
       const liveBadge = document.createElement("span");
       liveBadge.className = "news-result-live";
-      liveBadge.textContent = "LIVE";
+      liveBadge.textContent = "live";
       header.append(liveBadge);
     }
 
@@ -102,6 +102,7 @@
       thumbImg.src = thumb;
       thumbImg.alt = "";
       thumbImg.loading = "lazy";
+      thumbImg.onload = () => thumbWrapper.classList.add("loaded");
       thumbImg.onerror = () => thumbWrapper.remove();
       thumbWrapper.append(thumbImg);
 
@@ -109,7 +110,8 @@
     } else {
       const placeholder = document.createElement("div");
       placeholder.className = "news-result-thumb-placeholder";
-      placeholder.innerText = `>.<`;
+      placeholder.setAttribute("aria-hidden", "true");
+      placeholder.textContent = ">.<";
       link.append(placeholder);
     }
 
@@ -124,12 +126,10 @@
     if (!results?.length) {
       const noResults = document.createElement("div");
       noResults.className = "no-results";
-      noResults.textContent = "No news found";
+      noResults.textContent = "no news found";
       frag.append(noResults);
     } else {
-      for (const r of results) {
-        frag.append(renderNewsResult(r));
-      }
+      for (const r of results) frag.append(renderNewsResult(r));
     }
 
     container.append(frag);
@@ -139,9 +139,7 @@
     const container = document.getElementById("news-results");
     const frag = document.createDocumentFragment();
 
-    for (const r of results) {
-      frag.append(renderNewsResult(r));
-    }
+    for (const r of results) frag.append(renderNewsResult(r));
 
     container.append(frag);
   };
@@ -181,7 +179,7 @@
         if (!newData.results?.length) {
           const endEl = document.createElement("div");
           endEl.className = "end-of-results";
-          endEl.textContent = "No more news";
+          endEl.textContent = "no more news";
           document.getElementById("news-results").append(endEl);
         }
         return;

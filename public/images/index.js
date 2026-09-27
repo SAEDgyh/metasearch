@@ -178,63 +178,99 @@
     }
   };
 
-  const createDetailPanel = (img) => {
-    const width = img.properties?.width;
-    const height = img.properties?.height;
+  const motion = matchMedia("(prefers-reduced-motion: no-preference)");
+  const easeOut =
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--ease-out")
+      .trim() || "cubic-bezier(0.23, 1, 0.32, 1)";
+  const easeDrawer = "cubic-bezier(0.32, 0.72, 0, 1)";
+  let closingPanel = null;
 
+  const svgIcon = (d) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${d}"/></svg>`;
+
+  const itemFor = (index) =>
+    document.querySelector(
+      `#images-grid .image-item[data-image-index="${index}"]`,
+    );
+
+  const neighborIndex = (from, direction) => {
+    const items = [
+      ...document.querySelectorAll("#images-grid .image-item"),
+    ].filter((el) => el.offsetParent);
+    const pos = items.findIndex((el) => Number(el.dataset.imageIndex) === from);
+    if (pos === -1) return -1;
+    const next = items[pos + direction];
+    return next ? Number(next.dataset.imageIndex) : -1;
+  };
+
+  const updateNavButtons = () => {
+    if (!detailPanel) return;
+    for (const btn of detailPanel.querySelectorAll("[data-nav]")) {
+      btn.disabled = neighborIndex(selectedIndex, Number(btn.dataset.nav)) < 0;
+    }
+  };
+
+  const createDetailPanel = () => {
     const panel = document.createElement("div");
     panel.className = "image-detail-panel";
-    if (detailMode === "sidebar") {
-      panel.classList.add("sidebar-mode");
-    }
+    panel.setAttribute("role", "region");
+    panel.setAttribute("aria-label", "image details");
+    if (detailMode === "sidebar") panel.classList.add("sidebar-mode");
 
     const header = document.createElement("div");
     header.className = "image-detail-header";
 
-    const prevBtn = document.createElement("button");
-    prevBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>`;
-    prevBtn.title = "Previous";
-    prevBtn.onclick = (e) => {
-      e.stopPropagation();
-      navigateImage(-1);
-    };
+    for (const [label, d, nav] of [
+      ["previous image", "M15 19l-7-7 7-7", -1],
+      ["next image", "M9 5l7 7-7 7", 1],
+      ["close", "M6 18L18 6M6 6l12 12", 0],
+    ]) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.innerHTML = svgIcon(d);
+      btn.title = label;
+      btn.setAttribute("aria-label", label);
+      if (nav) btn.dataset.nav = nav;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (nav) navigateImage(nav);
+        else closeDetailPanel();
+      });
+      header.append(btn);
+    }
 
-    const nextBtn = document.createElement("button");
-    nextBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>`;
-    nextBtn.title = "Next";
-    nextBtn.onclick = (e) => {
-      e.stopPropagation();
-      navigateImage(1);
-    };
+    panel.append(header);
+    return panel;
+  };
 
-    const closeBtn = document.createElement("button");
-    closeBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>`;
-    closeBtn.title = "Close";
-    closeBtn.onclick = (e) => {
-      e.stopPropagation();
-      closeDetailPanel();
-    };
-
-    header.append(prevBtn, nextBtn, closeBtn);
+  const createDetailContent = (img, thumbImg) => {
+    const width = img.properties?.width;
+    const height = img.properties?.height;
+    const fullUrl = img.properties?.url || img.thumbnail || "";
+    const ratio =
+      width && height
+        ? width / height
+        : thumbImg?.naturalWidth
+          ? thumbImg.naturalWidth / thumbImg.naturalHeight
+          : 1;
 
     const content = document.createElement("div");
     content.className = "image-detail-content";
 
     const preview = document.createElement("a");
     preview.className = "image-detail-preview";
-    preview.href = safeUrl(img.properties.url);
+    preview.href = safeUrl(fullUrl);
     preview.target = "_blank";
     preview.rel = "noopener";
 
     const previewImg = document.createElement("img");
-    previewImg.src = `https://external-content.duckduckgo.com/iu/?u=${encodeURIComponent(img.properties.url)}`;
-    previewImg.style.aspectRatio = `${width}/${height}`;
-    previewImg.alt = img.title;
-
-    previewImg.style.backgroundImage = `url("${img.thumbnail}")`;
-    previewImg.style.backgroundSize = "contain";
-    previewImg.style.backgroundRepeat = "no-repeat";
-    previewImg.style.backgroundPosition = "center center";
+    previewImg.alt = img.title || "";
+    previewImg.style.setProperty("--ar", ratio);
+    if (img.thumbnail) {
+      previewImg.style.backgroundImage = `url(${JSON.stringify(img.thumbnail)})`;
+    }
+    previewImg.src = `https://external-content.duckduckgo.com/iu/?u=${encodeURIComponent(fullUrl)}`;
     preview.append(previewImg);
 
     const info = document.createElement("div");
@@ -242,35 +278,118 @@
 
     const titleEl = document.createElement("h2");
     titleEl.className = "image-detail-title";
-    titleEl.textContent = img.title;
+    titleEl.textContent = img.title || "";
 
     const sourceEl = document.createElement("a");
     sourceEl.className = "image-detail-source";
-    sourceEl.href = img.url;
+    sourceEl.href = safeUrl(img.url);
     sourceEl.target = "_blank";
     sourceEl.rel = "noopener";
-    sourceEl.textContent = (img.meta_url?.hostname || "").replace(/^www\./, "");
+    if (img.meta_url?.favicon) {
+      const favicon = document.createElement("img");
+      favicon.src = img.meta_url.favicon;
+      favicon.alt = "";
+      favicon.onerror = () => favicon.remove();
+      sourceEl.append(favicon);
+    }
+    const sourceName = document.createElement("span");
+    sourceName.textContent = (img.meta_url?.hostname || "").replace(
+      /^www\./,
+      "",
+    );
+    sourceEl.append(sourceName);
 
-    const dimensionsEl = document.createElement("div");
-    dimensionsEl.className = "image-detail-dimensions";
+    info.append(titleEl, sourceEl);
+
     if (width && height) {
+      const dimensionsEl = document.createElement("div");
+      dimensionsEl.className = "image-detail-dimensions";
       dimensionsEl.textContent = `${width} × ${height}`;
+      info.append(dimensionsEl);
     }
 
     const actions = document.createElement("div");
     actions.className = "image-detail-actions";
     const viewLink = document.createElement("a");
-    viewLink.href = safeUrl(img.properties.url);
+    viewLink.href = safeUrl(fullUrl);
     viewLink.target = "_blank";
     viewLink.rel = "noopener";
-    viewLink.textContent = "View file";
+    viewLink.innerHTML = `<span>view file</span>${svgIcon("M7 17L17 7M8 7h9v9")}`;
     actions.append(viewLink);
+    info.append(actions);
 
-    info.append(titleEl, sourceEl, dimensionsEl, actions);
     content.append(preview, info);
-    panel.append(header, content);
+    return content;
+  };
 
-    return panel;
+  const flipFromThumb = (thumb, target) => {
+    if (!thumb) return;
+    const from = thumb.getBoundingClientRect();
+    const to = target.getBoundingClientRect();
+    if (!from.width || !to.width || !to.height) return;
+    const scale = Math.max(from.width / to.width, from.height / to.height);
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    const insetX = Math.max(0, (to.width - from.width / scale) / 2);
+    const insetY = Math.max(0, (to.height - from.height / scale) / 2);
+    const keyframes = [
+      {
+        transform: `translate(${dx}px, ${dy}px) scale(${scale})`,
+        clipPath: `inset(${insetY}px ${insetX}px round ${10 / scale}px)`,
+      },
+      { transform: "none", clipPath: "inset(0px 0px round 10px)" },
+    ];
+    const timing = { duration: 460, easing: easeDrawer };
+
+    if (!target.closest(".sidebar-mode")) {
+      target.animate(keyframes, timing);
+      return;
+    }
+
+    const ghost = document.createElement("img");
+    ghost.src = thumb.currentSrc || thumb.src;
+    ghost.alt = "";
+    Object.assign(ghost.style, {
+      position: "fixed",
+      left: `${to.left}px`,
+      top: `${to.top}px`,
+      width: `${to.width}px`,
+      height: `${to.height}px`,
+      objectFit: "cover",
+      borderRadius: "10px",
+      zIndex: 60,
+      pointerEvents: "none",
+    });
+    document.body.append(ghost);
+    target.style.visibility = "hidden";
+    const done = () => {
+      ghost.remove();
+      target.style.visibility = "";
+    };
+    ghost.animate(keyframes, timing).finished.then(done, done);
+  };
+
+  const slideContent = (content, direction) => {
+    const offset = direction * 16;
+    for (const el of [
+      content.querySelector(".image-detail-preview img"),
+      content.querySelector(".image-detail-info"),
+    ]) {
+      el?.animate(
+        [
+          { opacity: 0, transform: `translateX(${offset}px)` },
+          { opacity: 1, transform: "none" },
+        ],
+        { duration: 200, easing: easeOut },
+      );
+    }
+  };
+
+  const clipWhile = (panel, animation) => {
+    panel.classList.add("is-animating");
+    animation.finished
+      .catch(() => {})
+      .then(() => panel.classList.remove("is-animating"));
   };
 
   const preserveAnchorPosition = (anchor, mutate) => {
@@ -287,97 +406,242 @@
     }
   };
 
-  const closeDetailPanel = ({ skipLayoutCompensation = false } = {}) => {
+  const closeDetailPanel = ({ instant = false } = {}) => {
     const selected = document.querySelector(".image-item.selected");
-    const wasSidebarOpen = document.body.classList.contains(
-      "images-detail-sidebar-open",
-    );
-    const shouldCompensate = wasSidebarOpen && !skipLayoutCompensation;
-
-    preserveAnchorPosition(shouldCompensate ? selected : null, () => {
-      if (detailPanel) {
-        detailPanel.remove();
-        detailPanel = null;
-      }
-      if (selected) selected.classList.remove("selected");
-      if (!skipLayoutCompensation) {
-        document.body.classList.remove("images-detail-sidebar-open");
-      }
-    });
-
+    selected?.classList.remove("selected");
     selectedIndex = -1;
-  };
 
-  const showDetailPanel = (index) => {
-    if (index < 0 || index >= allImages.length) return;
+    const panel = detailPanel;
+    detailPanel = null;
+    if (!panel) return;
 
-    closeDetailPanel({ skipLayoutCompensation: detailMode === "sidebar" });
-    selectedIndex = index;
-
-    const img = allImages[index];
-    const grid = document.getElementById("images-grid");
-    const items = grid.querySelectorAll(".image-item");
-
-    let clickedItem = null;
-    for (const item of items) {
-      if (parseInt(item.dataset.imageIndex, 10) === index) {
-        clickedItem = item;
-        break;
-      }
+    const hadFocus = panel.contains(document.activeElement);
+    const sidebar = panel.classList.contains("sidebar-mode");
+    if (sidebar) {
+      preserveAnchorPosition(selected, () =>
+        document.body.classList.remove("images-detail-sidebar-open"),
+      );
     }
+    if (hadFocus) selected?.focus({ preventScroll: true });
 
-    if (!clickedItem) {
-      console.warn("Could not find image item for index:", index);
+    if (instant || !motion.matches || !panel.isConnected) {
+      panel.remove();
       return;
     }
 
-    clickedItem.classList.add("selected");
+    closingPanel?.remove();
+    closingPanel = panel;
+    panel.style.pointerEvents = "none";
+    const done = () => {
+      panel.remove();
+      if (closingPanel === panel) closingPanel = null;
+    };
 
-    detailPanel = createDetailPanel(img, index);
+    if (sidebar) {
+      panel
+        .animate(
+          [
+            { opacity: 1, transform: "none", filter: "blur(0px)" },
+            { opacity: 0, transform: "translateX(12px)", filter: "blur(4px)" },
+          ],
+          { duration: 180, easing: easeOut, fill: "forwards" },
+        )
+        .finished.then(done, done);
+      return;
+    }
+
+    const content = panel.querySelector(".image-detail-content");
+    content?.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: 120,
+      easing: "ease-out",
+      fill: "forwards",
+    });
+    const shrink = panel.animate(
+      [
+        { height: `${panel.offsetHeight}px` },
+        { height: "0px", marginTop: "0px", marginBottom: "0px" },
+      ],
+      { duration: 260, easing: easeOut, fill: "forwards" },
+    );
+    for (const pseudoElement of ["::before", "::after"]) {
+      panel.animate(
+        [{ transform: "none" }, { transform: "translateY(20px)" }],
+        {
+          duration: 260,
+          easing: easeOut,
+          fill: "forwards",
+          pseudoElement,
+        },
+      );
+    }
+    panel.classList.add("is-animating");
+    shrink.finished.then(done, done);
+  };
+
+  const showDetailPanel = (index, { direction = 0 } = {}) => {
+    const item = itemFor(index);
+    const img = allImages[index];
+    if (!item || !img) return;
+
+    closingPanel?.remove();
+    closingPanel = null;
+
+    document
+      .querySelector(".image-item.selected")
+      ?.classList.remove("selected");
+    item.classList.add("selected");
+    selectedIndex = index;
+    if (document.activeElement?.classList.contains("image-item")) {
+      item.focus({ preventScroll: true });
+    }
+
+    const thumbImg = item.querySelector("img");
+    const content = createDetailContent(img, thumbImg);
+    const animate = motion.matches;
+    const fromThumb = !direction;
+
+    const swapInto = (panel) => {
+      const sidebar = panel.classList.contains("sidebar-mode");
+      const before = panel.offsetHeight;
+      panel.querySelector(".image-detail-content").replaceWith(content);
+      updateNavButtons();
+      if (sidebar) {
+        item.scrollIntoView({
+          block: "nearest",
+          behavior: animate ? "smooth" : "auto",
+        });
+      }
+      if (!animate) return;
+      const after = panel.offsetHeight;
+      if (!sidebar && before !== after) {
+        clipWhile(
+          panel,
+          panel.animate([{ height: `${before}px` }, { height: `${after}px` }], {
+            duration: 280,
+            easing: easeOut,
+          }),
+        );
+      }
+      if (fromThumb)
+        flipFromThumb(
+          thumbImg,
+          content.querySelector(".image-detail-preview img"),
+        );
+      else slideContent(content, direction);
+    };
 
     if (detailMode === "sidebar") {
-      const alreadyOpen = document.body.classList.contains(
-        "images-detail-sidebar-open",
-      );
-      preserveAnchorPosition(alreadyOpen ? null : clickedItem, () => {
+      if (detailPanel) {
+        swapInto(detailPanel);
+        return;
+      }
+      detailPanel = createDetailPanel();
+      detailPanel.append(content);
+      preserveAnchorPosition(item, () => {
         document.body.classList.add("images-detail-sidebar-open");
         document.body.append(detailPanel);
       });
+      updateNavButtons();
+      if (!animate) return;
+      const target = content.querySelector(".image-detail-preview img");
+      if (fromThumb) flipFromThumb(thumbImg, target);
+      detailPanel.animate(
+        [
+          { opacity: 0, transform: "translateX(24px)" },
+          { opacity: 1, transform: "none" },
+        ],
+        { duration: 320, easing: easeOut },
+      );
       return;
     }
 
-    const clickedTop = clickedItem.offsetTop;
-
-    let insertAfterItem = clickedItem;
-    for (const item of items) {
-      const itemIndex = parseInt(item.dataset.imageIndex, 10);
-      if (itemIndex > index) {
-        const itemTop = item.offsetTop;
-        if (Math.abs(itemTop - clickedTop) < 10) {
-          insertAfterItem = item;
-        } else {
-          break;
-        }
+    const rowEnd = () => {
+      let end = item;
+      for (let el = item.nextElementSibling; el; el = el.nextElementSibling) {
+        if (!el.classList.contains("image-item")) break;
+        if (!el.offsetParent) continue;
+        if (Math.abs(el.offsetTop - item.offsetTop) >= 10) break;
+        end = el;
       }
+      return end;
+    };
+
+    if (
+      detailPanel?.isConnected &&
+      rowEnd().nextElementSibling === detailPanel
+    ) {
+      swapInto(detailPanel);
+      return;
     }
 
-    insertAfterItem.after(detailPanel);
+    if (detailPanel) {
+      const old = detailPanel;
+      detailPanel = null;
+      preserveAnchorPosition(item, () => old.remove());
+    }
 
-    requestAnimationFrame(() => {
-      const rect = detailPanel.getBoundingClientRect();
-      const margin = 50;
+    const panel = createDetailPanel();
+    panel.append(content);
+    rowEnd().after(panel);
+    detailPanel = panel;
+    updateNavButtons();
 
-      if (rect.top < margin || rect.bottom > window.innerHeight - margin) {
-        detailPanel.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-    });
+    const rect = panel.getBoundingClientRect();
+    const itemTop = item.getBoundingClientRect().top;
+    const overflow = rect.bottom + 16 - window.innerHeight;
+    const delta =
+      itemTop < 16
+        ? itemTop - 16
+        : Math.max(0, Math.min(overflow, itemTop - 16));
+    if (delta) {
+      window.scrollBy({ top: delta, behavior: animate ? "smooth" : "auto" });
+    }
+
+    if (!animate) return;
+
+    if (!fromThumb) {
+      slideContent(content, direction);
+      return;
+    }
+
+    const opts = { duration: 460, easing: easeDrawer };
+    clipWhile(
+      panel,
+      panel.animate(
+        [
+          { height: "0px", marginTop: "0px", marginBottom: "0px" },
+          {
+            height: `${rect.height}px`,
+            marginTop: "12px",
+            marginBottom: "12px",
+          },
+        ],
+        opts,
+      ),
+    );
+    for (const pseudoElement of ["::before", "::after"]) {
+      panel.animate(
+        [{ transform: "translateY(20px)" }, { transform: "none" }],
+        {
+          ...opts,
+          pseudoElement,
+        },
+      );
+    }
+    panel
+      .querySelector(".image-detail-header")
+      .animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: 240,
+        delay: 120,
+        easing: easeOut,
+        fill: "backwards",
+      });
+    flipFromThumb(thumbImg, content.querySelector(".image-detail-preview img"));
   };
 
   const navigateImage = (direction) => {
-    const newIndex = selectedIndex + direction;
-    if (newIndex >= 0 && newIndex < allImages.length) {
-      showDetailPanel(newIndex);
-    }
+    const next = neighborIndex(selectedIndex, direction);
+    if (next >= 0) showDetailPanel(next, { direction });
   };
 
   const transparencyCanvas = document.createElement("canvas");
@@ -457,7 +721,9 @@
 
     const link = document.createElement("div");
     link.className = "image-item";
-    link.style.cursor = "pointer";
+    link.tabIndex = 0;
+    link.setAttribute("role", "button");
+    link.setAttribute("aria-label", title || "image");
     link.dataset.imageIndex = index;
 
     const imageWrapper = document.createElement("div");
@@ -466,12 +732,11 @@
     const imgEl = document.createElement("img");
     imgEl.alt = title;
     imgEl.loading = "lazy";
-    imgEl.style.opacity = "0";
     if (thumbUrl.startsWith("https://imgs.search.brave.com/")) {
       imgEl.crossOrigin = "anonymous";
     }
     imgEl.onload = () => {
-      imgEl.style.opacity = "1";
+      link.classList.add("loaded");
       applyTransparentFilter(link, imgEl, img);
     };
     imgEl.onerror = () => {
@@ -523,7 +788,14 @@
 
     link.addEventListener("click", (e) => {
       e.preventDefault();
-      showDetailPanel(index);
+      if (selectedIndex === index) closeDetailPanel();
+      else showDetailPanel(index);
+    });
+
+    link.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      link.click();
     });
 
     return link;
@@ -536,7 +808,7 @@
     if (!results?.length) {
       const noResults = document.createElement("div");
       noResults.className = "no-results";
-      noResults.textContent = "No images found";
+      noResults.textContent = "no images found";
       frag.append(noResults);
     } else {
       allImages = results;
@@ -597,7 +869,7 @@
         if (!newData.results?.length) {
           const endEl = document.createElement("div");
           endEl.className = "end-of-results";
-          endEl.textContent = "No more images";
+          endEl.textContent = "no more images";
           document.getElementById("images-grid").append(endEl);
         }
         return;
@@ -620,12 +892,15 @@
 
   document.addEventListener("keydown", (e) => {
     if (selectedIndex === -1) return;
+    if (e.target.closest?.("input, textarea, [contenteditable]")) return;
 
     if (e.key === "Escape") {
       closeDetailPanel();
     } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
       navigateImage(-1);
     } else if (e.key === "ArrowRight") {
+      e.preventDefault();
       navigateImage(1);
     }
   });
@@ -666,6 +941,7 @@
 
     await initBlocklist();
 
+    closeDetailPanel({ instant: true });
     const grid = document.getElementById("images-grid");
     grid.innerHTML = "";
     renderImages(allImages);
@@ -686,7 +962,7 @@
     const wasOpen = selectedIndex !== -1;
     const reopenIndex = selectedIndex;
 
-    if (wasOpen) closeDetailPanel();
+    if (wasOpen) closeDetailPanel({ instant: true });
 
     detailMode = e.target.checked ? "sidebar" : "bar";
     writeCookie("pref_images_detail", detailMode);

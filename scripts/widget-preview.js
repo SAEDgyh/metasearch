@@ -2,137 +2,116 @@ import { file } from "bun";
 
 const ROOT = new URL("../public/", import.meta.url).pathname;
 
-const QUERIES = [
-  "qr code https://search.tiago.zip",
-  "password generator",
-  "uuid",
-  "lorem ipsum",
-  "flip a coin",
-  "roll 2d20",
-  "random number 1 to 100",
-  "magic 8 ball",
-  "pick between pizza, sushi, tacos",
-  "base64 encode hello world",
-  "hello to morse",
-  "nato phonetic claude",
-  "text to binary hi",
-  "#89b4fa",
-  "random color",
-  "contrast checker",
-  "css gradient",
-  "calculator",
-  "bmi calculator",
-  "tip calculator",
-  "loan calculator",
-  "25% of 200",
-  "aspect ratio",
-  "255 to binary",
-  "2024 to roman",
-  "factor 360",
-  "mean of 4 8 15 16 23 42",
-  "age from 1995-06-15",
-  "days until 2027-01-01",
-  "unix timestamp 1700000000",
-  "world clock",
-  "what time is it",
-  "time in moscow",
-  "time in tokyo",
-  "pomodoro",
-  "new year countdown",
-  "box breathing",
-  "word counter",
-  "bpm tapper",
-  "metronome",
-  "440hz",
-  "white noise",
-  "piano",
-  "drum machine",
-  "melody generator",
-  "reaction time",
-  "tic tac toe",
-  "rock paper scissors",
-  "typing test",
-  "json formatter",
-  "jwt decoder",
-  "sha256 hash hello",
-  "my user agent",
-  "screen resolution",
-  "regex tester",
-  "markdown preview",
-  "ascii table",
-  "char info ✓",
-  "emoji search",
-  "emoji heart",
-  "kaomoji",
-  "cron */15 9-17 * * 1-5",
-  "sorting visualizer",
-  "snake",
-  "2048",
-  "minesweeper",
-  "am i gay",
-  "am i trans",
-  "am i a furry",
-  "iq test",
-  "is tiago a furry",
-  "should i ship it?",
-  "8ball",
-  "guitar chord Am",
-  "chord Cmaj7",
-  "text diff",
-  "number to words 1234567",
-  "http 404",
-  "chmod 755",
-  "caesar cipher 3 hello world",
-  "leetspeak elite hacker",
-  "subnet 192.168.1.0/24",
-  "sleep calculator",
-  "translate good morning to japanese",
-  "hello in french",
-  "4.49 aud to usd",
-  "4.49 aud tou sd",
-  "100 usd in eur",
-  "50 euros to pounds",
-  "$20 to jpy",
-  "250 thb to inr",
-];
+const GROUPS = {
+  generators: [
+    "qr code https://search.tiago.zip",
+    "password generator",
+    "uuid",
+    "lorem ipsum",
+  ],
+  chance: [
+    "flip a coin",
+    "roll 2d20",
+    "random number 1 to 100",
+    "magic 8 ball",
+    "should i ship it?",
+    "pick between pizza, sushi, tacos",
+  ],
+  quizzes: [
+    "am i gay",
+    "am i trans",
+    "am i a furry",
+    "iq test",
+    "is tiago a furry",
+  ],
+  text: [
+    "base64 encode hello world",
+    "hello to morse",
+    "nato phonetic claude",
+    "text to binary hi",
+    "caesar cipher 3 hello world",
+    "leetspeak elite hacker",
+    "word counter",
+    "text diff",
+    "number to words 1234567",
+  ],
+  color: ["#89b4fa", "random color", "contrast checker", "css gradient"],
+  math: [
+    "calculator",
+    "bmi calculator",
+    "tip calculator",
+    "loan calculator",
+    "25% of 200",
+    "aspect ratio",
+    "255 to binary",
+    "2024 to roman",
+    "factor 360",
+    "mean of 4 8 15 16 23 42",
+  ],
+  time: [
+    "what time is it",
+    "time in tokyo",
+    "time in moscow",
+    "world clock",
+    "age from 1995-06-15",
+    "days until 2027-01-01",
+    "unix timestamp 1700000000",
+    "pomodoro",
+    "new year countdown",
+    "box breathing",
+    "sleep calculator",
+  ],
+  audio: [
+    "bpm tapper",
+    "metronome",
+    "440hz",
+    "white noise",
+    "piano",
+    "drum machine",
+    "melody generator",
+    "guitar chord Am",
+    "chord Cmaj7",
+  ],
+  games: [
+    "reaction time",
+    "tic tac toe",
+    "rock paper scissors",
+    "typing test",
+    "sorting visualizer",
+    "snake",
+    "2048",
+    "minesweeper",
+  ],
+  developer: [
+    "json formatter",
+    "jwt decoder",
+    "sha256 hash hello",
+    "my user agent",
+    "screen resolution",
+    "regex tester",
+    "markdown preview",
+    "ascii table",
+    "char info ✓",
+    "cron */15 9-17 * * 1-5",
+    "http 404",
+    "chmod 755",
+    "subnet 192.168.1.0/24",
+  ],
+  emoji: ["emoji search", "emoji heart", "kaomoji"],
+  convert: [
+    "png to jpg",
+    "4.49 aud to usd",
+    "100 usd in eur",
+    "50 euros to pounds",
+    "$20 to jpy",
+    "250 thb to inr",
+    "translate good morning to japanese",
+    "hello in french",
+  ],
+};
 
-const page = `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="/search.css">
-<style>
-  body { background: var(--bg); color: var(--text); margin: 0; padding: 24px; }
-  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 20px; align-items: start; }
-  .cell { }
-  .cell > h4 { font-size: 0.75rem; color: var(--muted); margin: 0 0 6px; font-family: ui-monospace, monospace; }
-  .miss { color: #f38ba8; font-size: 0.8rem; }
-</style></head><body>
-<h2 style="font-weight:600">local widgets gallery</h2>
-<div class="gallery" id="g"></div>
-<script type="module">
-import { renderLocalWidgets, __widgetCount } from "/s/widgets.js";
-const all = ${JSON.stringify(QUERIES)};
-const p = new URLSearchParams(location.search);
-const one = p.get("q");
-const from = +(p.get("from") || 0);
-const to = p.get("to") ? +p.get("to") : all.length;
-const queries = one ? [one] : all.slice(from, to);
-if (one) document.getElementById("g").style.gridTemplateColumns = "minmax(0, 520px)";
-const g = document.getElementById("g");
-let hits = 0;
-for (const q of queries) {
-  const cell = document.createElement("div");
-  cell.className = "cell";
-  const label = document.createElement("h4");
-  label.textContent = q;
-  cell.append(label);
-  const w = renderLocalWidgets(q);
-  if (w) { cell.append(w); hits++; }
-  else { const m = document.createElement("div"); m.className = "miss"; m.textContent = "NO MATCH"; cell.append(m); }
-  g.append(cell);
-}
-window.__stats = { total: queries.length, hits, registered: __widgetCount };
-console.log("widgets:", __widgetCount, "queries:", queries.length, "matched:", hits);
-</script></body></html>`;
+const PROD = "https://search.tiago.zip";
+const PORT = Number(process.env.PORT) || 5599;
 
 const types = {
   js: "application/javascript",
@@ -256,11 +235,29 @@ async function searchJs() {
 }
 
 Bun.serve({
-  port: 5599,
+  port: PORT,
+  idleTimeout: 60,
   async fetch(req) {
     const { pathname } = new URL(req.url);
-    if (pathname === "/" || pathname === "/index.html")
-      return new Response(page, { headers: { "content-type": "text/html" } });
+    if (pathname === "/" || pathname === "/index.html") {
+      const html = await Bun.file(
+        new URL("./widget-preview.html", import.meta.url).pathname,
+      ).text();
+      return new Response(html.replace("__GROUPS__", JSON.stringify(GROUPS)), {
+        headers: { "content-type": "text/html" },
+      });
+    }
+    if (pathname === "/translate" || pathname.startsWith("/dict/")) {
+      const up = await fetch(`${PROD}${pathname}`, {
+        method: req.method,
+        headers: { "content-type": req.headers.get("content-type") || "" },
+        body: req.method === "POST" ? await req.text() : undefined,
+      });
+      return new Response(await up.text(), {
+        status: up.status,
+        headers: { "content-type": up.headers.get("content-type") || "" },
+      });
+    }
     if (pathname === "/page")
       return new Response(await searchPage(), {
         headers: { "content-type": "text/html" },
@@ -292,4 +289,4 @@ Bun.serve({
     });
   },
 });
-console.log("widget preview on http://localhost:5599");
+console.log(`widget preview on http://localhost:${PORT}`);

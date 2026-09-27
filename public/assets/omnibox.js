@@ -6,6 +6,8 @@ const ICON_SEARCH = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
 
 const ICON_ARROW = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 14 4 9l5-5"></path><path d="M4 9h11a4 4 0 0 1 4 4v7"></path></svg>`;
 
+const EASE = "cubic-bezier(0.23, 1, 0.32, 1)";
+
 const STYLE = `
 .omnibox-host {
   position: relative;
@@ -19,53 +21,72 @@ const STYLE = `
   display: none;
   flex-direction: column;
   gap: 2px;
-  padding: 5px;
+  padding: 4px;
   background: var(--surface0, #313244);
-  border: 1px solid var(--surface1, #45475a);
-  border-radius: 10px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 1px var(--surface1, #45475a),
+    0 2px 4px rgb(0 0 0 / 0.16),
+    0 16px 32px -12px rgb(0 0 0 / 0.5);
   max-height: min(70vh, 620px);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--surface1, #45475a) transparent;
-  transform: scale(0.96);
-  transform-origin: top center;
   opacity: 0;
+  translate: 0 -4px;
+  filter: blur(4px);
+  pointer-events: none;
   transition:
-    transform var(--duration-slow, 0.2s) var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1)),
-    opacity var(--duration-base, 0.15s) var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1)),
-    display var(--duration-slow, 0.2s) allow-discrete;
+    opacity 140ms ${EASE},
+    translate 140ms ${EASE},
+    filter 140ms ${EASE},
+    display 140ms allow-discrete;
 }
 .omnibox-panel.open {
   display: flex;
-  transform: scale(1);
+  opacity: 1;
+  translate: 0 0;
+  filter: none;
+  pointer-events: auto;
+  transition: none;
+}
+.omnibox-hl {
+  position: absolute;
+  top: 0;
+  left: 4px;
+  right: 4px;
+  border-radius: 8px;
+  background: var(--surface1, #45475a);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 120ms ${EASE},
+    height 120ms ${EASE},
+    opacity 100ms ease;
+}
+.omnibox-hl.on {
   opacity: 1;
 }
-@starting-style {
-  .omnibox-panel.open {
-    transform: scale(0.96);
-    opacity: 0;
-  }
+.omnibox-hl.snap {
+  transition: opacity 100ms ease;
 }
 .omnibox-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 9px 10px;
-  border-radius: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
   cursor: pointer;
   color: var(--text, #cdd6f4);
   user-select: none;
-  transition: background .2s, transform .2s;
-}
-.omnibox-item:hover,
-.omnibox-item.active {
-  background: var(--surface1, #45475aa6);
-  transition: transform .2s;
+  transition:
+    background-color 150ms ease,
+    scale 200ms ${EASE};
 }
 .omnibox-item:active {
-  transform: scale(.98);
+  scale: 0.985;
 }
 .omnibox-icon {
   flex: none;
@@ -74,10 +95,14 @@ const STYLE = `
   display: grid;
   place-items: center;
   color: var(--muted, #7f849c);
+  transition: color 120ms ease;
 }
 .omnibox-icon svg {
   width: 18px;
   height: 18px;
+}
+.omnibox-item.active .omnibox-icon {
+  color: var(--subtext, #a6adc8);
 }
 .omnibox-thumb {
   flex: none;
@@ -86,6 +111,8 @@ const STYLE = `
   border-radius: 6px;
   object-fit: cover;
   background: var(--surface1, #45475aa6);
+  outline: 1px solid rgb(255 255 255 / 0.08);
+  outline-offset: -1px;
 }
 .omnibox-text {
   flex: 1;
@@ -116,17 +143,38 @@ const STYLE = `
   place-items: center;
   color: var(--muted, #7f849c);
   opacity: 0;
+  translate: -3px 0;
+  transition:
+    opacity 120ms ease,
+    translate 160ms ${EASE};
 }
 .omnibox-arrow svg {
   width: 16px;
   height: 16px;
 }
 .omnibox-item.active .omnibox-arrow {
-  opacity: 0.7;
+  opacity: 0.8;
+  translate: 0 0;
 }
 @media (hover: hover) and (pointer: fine) {
+  .omnibox-item:not(.active):hover {
+    background-color: color-mix(in srgb, var(--surface1, #45475a) 55%, transparent);
+    transition: scale 200ms ${EASE};
+  }
   .omnibox-item:hover .omnibox-arrow {
-    opacity: 0.7;
+    opacity: 0.8;
+    translate: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .omnibox-panel,
+  .omnibox-hl,
+  .omnibox-arrow {
+    transition-property: opacity;
+  }
+  .omnibox-panel {
+    translate: none;
+    filter: none;
   }
 }
 `;
@@ -139,8 +187,6 @@ const ensureStyles = () => {
   document.head.append(el);
 };
 
-// build the title, dimming the part the user already typed. all text goes
-// through textContent so suggestion text can't inject markup
 const renderTitle = (node, text, typed) => {
   node.textContent = "";
   const lower = text.toLowerCase();
@@ -165,6 +211,10 @@ const setup = (host, input, form) => {
   panel.setAttribute("role", "listbox");
   host.append(panel);
 
+  const hl = document.createElement("div");
+  hl.className = "omnibox-hl";
+  hl.setAttribute("aria-hidden", "true");
+
   input.setAttribute("autocomplete", "off");
   input.setAttribute("autocorrect", "off");
   input.setAttribute("autocapitalize", "off");
@@ -188,6 +238,7 @@ const setup = (host, input, form) => {
     }
     active = next;
     if (active < 0) {
+      hl.classList.remove("on");
       input.value = typedValue;
       input.removeAttribute("aria-activedescendant");
       return;
@@ -195,6 +246,15 @@ const setup = (host, input, form) => {
     const row = rows[active];
     row.classList.add("active");
     row.setAttribute("aria-selected", "true");
+    const wasOn = hl.classList.contains("on");
+    if (!wasOn) hl.classList.add("snap");
+    hl.style.transform = `translateY(${row.offsetTop}px)`;
+    hl.style.height = `${row.offsetHeight}px`;
+    if (!wasOn) {
+      hl.getBoundingClientRect();
+      hl.classList.remove("snap");
+      hl.classList.add("on");
+    }
     row.scrollIntoView({ block: "nearest" });
     input.value = items[active].query;
     input.setAttribute("aria-activedescendant", row.id);
@@ -203,6 +263,7 @@ const setup = (host, input, form) => {
   const close = () => {
     if (!panel.classList.contains("open")) return;
     panel.classList.remove("open");
+    hl.classList.remove("on");
     input.setAttribute("aria-expanded", "false");
     input.removeAttribute("aria-activedescendant");
     active = -1;
@@ -222,6 +283,8 @@ const setup = (host, input, form) => {
     const h0 = wasOpen ? panel.getBoundingClientRect().height : 0;
     for (const a of panel.getAnimations()) a.cancel();
     panel.textContent = "";
+    hl.classList.remove("on");
+    panel.append(hl);
 
     list.forEach((item, i) => {
       const row = document.createElement("div");
@@ -292,7 +355,7 @@ const setup = (host, input, form) => {
       panel
         .animate([{ height: `${h0}px` }, { height: `${h1}px` }], {
           duration: 220,
-          easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+          easing: EASE,
         })
         .finished.finally(() => {
           panel.style.overflow = "";
@@ -338,7 +401,7 @@ const setup = (host, input, form) => {
 
   input.addEventListener("input", () => {
     typedValue = input.value;
-    active = -1;
+    setActive(-1);
     const q = input.value.trim();
     clearTimeout(debounce);
     if (!q) {

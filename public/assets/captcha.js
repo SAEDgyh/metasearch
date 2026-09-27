@@ -1,6 +1,6 @@
 export const solveCaptcha = (captcha) => {
   return new Promise((resolve) => {
-    document.body.innerHTML = `<div class="captcha-loader"><h1>brave is checking if you're human, please wait…</h1><div class="progress-bar"><div class="progress"></div></div></div>`;
+    document.body.innerHTML = `<div class="captcha-loader"><h1>brave is checking if you're human, one moment…</h1><div class="progress-bar" role="progressbar" aria-label="verification progress"><div class="progress"></div></div></div>`;
 
     const frame = document.createElement("iframe");
     frame.style.width = "10px";
@@ -118,11 +118,12 @@ window.fetch = async (...args) => {
           );
 
           if (!resp.ok) {
-            document.querySelector("p").remove();
-            document.querySelector(".progress").style.backgroundColor =
-              "#ff5c5c";
-            document.querySelector("h1").innerHTML =
-              `an error occured. <br>please try again`;
+            const loader = document.querySelector(".captcha-loader");
+            loader?.classList.add("failed");
+            const heading = loader?.querySelector("h1");
+            if (heading)
+              heading.textContent =
+                "brave couldn't verify you, reload the page to try again";
           }
         }
       }

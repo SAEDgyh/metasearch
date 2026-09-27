@@ -24,6 +24,12 @@
   let lastLightMode = "dusk";
   let activeMarker = null;
 
+  const motion = matchMedia("(prefers-reduced-motion: no-preference)");
+  const easeOut =
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--ease-out")
+      .trim() || "cubic-bezier(0.23, 1, 0.32, 1)";
+
   const map = new mapboxgl.Map({
     container: "map",
     center: [2.293506, 48.859605],
@@ -42,7 +48,7 @@
   LIGHT_PRESETS.forEach((id) => {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = id[0].toUpperCase() + id.slice(1);
+    btn.textContent = id;
     btn.dataset.light = id;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -60,7 +66,16 @@
   function updateLayerUI() {
     const inSat = currentMode === "satellite";
     layersImg.src = inSat ? THUMB_PLAIN_SRC : THUMB_SATELLITE_SRC;
-    document.body.classList.toggle("theme-light", currentMode === "day");
+    const light = currentMode === "day";
+    if (document.body.classList.contains("theme-light") !== light) {
+      document.body.classList.add("mp-no-anim");
+      document.body.classList.toggle("theme-light", light);
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() =>
+          document.body.classList.remove("mp-no-anim"),
+        ),
+      );
+    }
     refreshPopoverActive();
   }
 
@@ -302,16 +317,39 @@
     openPanel(s);
   }
 
+  function dropMarker(marker) {
+    if (!marker) return;
+    const inner = marker.getElement().querySelector(".map-pin-inner");
+    if (!motion.matches || !inner) {
+      marker.remove();
+      return;
+    }
+    const done = () => marker.remove();
+    inner
+      .animate(
+        [
+          { opacity: 1, transform: "none", filter: "blur(0px)" },
+          {
+            opacity: 0,
+            transform: "translateY(-6px) scale(0.92)",
+            filter: "blur(4px)",
+          },
+        ],
+        { duration: 160, easing: "ease-out", fill: "forwards" },
+      )
+      .finished.then(done, done);
+  }
+
   function placePin(lng, lat) {
-    if (activeMarker) activeMarker.remove();
+    dropMarker(activeMarker);
     const wrap = document.createElement("div");
     wrap.className = "map-pin-wrap";
     wrap.innerHTML = `
       <div class="map-pin-inner">
-        <svg viewBox="0 0 32 42" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 32 42" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <path d="M16 1 C7.7 1 1 7.7 1 16 C1 27 16 41 16 41 S31 27 31 16 C31 7.7 24.3 1 16 1 Z"
-                fill="#89b4fa" stroke="#cdd6f4" stroke-width="2.5" stroke-linejoin="round"/>
-          <circle cx="16" cy="16" r="5" fill="#1f1e2e"/>
+                stroke-width="2.5" stroke-linejoin="round"/>
+          <circle cx="16" cy="16" r="5"/>
         </svg>
       </div>`;
     activeMarker = new mapboxgl.Marker({
@@ -371,20 +409,30 @@
   const panelBody = document.getElementById("map-body");
   function closePanel() {
     panel.classList.remove("open");
-    if (activeMarker) {
-      activeMarker.remove();
-      activeMarker = null;
-    }
+    dropMarker(activeMarker);
+    activeMarker = null;
+  }
+
+  function swapBody(html) {
+    const before = panel.offsetHeight;
+    panelBody.innerHTML = html;
+    if (!motion.matches || !panel.classList.contains("open")) return;
+    const after = panel.offsetHeight;
+    if (!before || before === after) return;
+    panel.animate([{ height: `${before}px` }, { height: `${after}px` }], {
+      duration: 300,
+      easing: easeOut,
+    });
   }
   document.getElementById("map-panel-close").onclick = closePanel;
 
   function openPanelSkeleton() {
-    panelBody.innerHTML = `
+    swapBody(`
       <div class="mp-skeleton mp-skl"></div>
       <div class="mp-skeleton mp-skl mp-short"></div>
       <div class="mp-skeleton mp-skl mp-tall" style="margin-top:16px;"></div>
       <div class="mp-skeleton mp-skl"></div>
-      <div class="mp-skeleton mp-skl mp-short"></div>`;
+      <div class="mp-skeleton mp-skl mp-short"></div>`);
     panel.classList.add("open");
   }
 
@@ -417,7 +465,9 @@
     fetchPlace(s.name, s.coords[1], s.coords[0])
       .then((data) => renderPanel(s, data))
       .catch((err) => {
-        panelBody.innerHTML = `<div class="mp-empty-hint">Error: ${esc(err.message)}</div>`;
+        swapBody(
+          `<div class="mp-empty-hint">couldn't load this place (${esc(err.message)})</div>`,
+        );
       });
   }
 
@@ -529,9 +579,10 @@
     const strip = all.slice(0, 3);
     if (!strip.length) return "";
     return `<div class="mp-photo-strip">${strip
-      .map((url) => {
-        return `<div class="mp-photo-tile" data-full="${esc(url)}" style="background-image:url('${esc(url)}')"></div>`;
-      })
+      .map(
+        (url, i) =>
+          `<button type="button" class="mp-photo-tile" data-full="${esc(url)}" aria-label="open photo ${i + 1}"><img src="${esc(url)}" alt="" decoding="async"></button>`,
+      )
       .join("")}</div>`;
   }
 
@@ -718,43 +769,87 @@
     const p = data.place;
 
     if (!p) {
-      panelBody.innerHTML = `
+      swapBody(
+        `
         <div class="mp-title-block">
           <h2 class="mp-title">${esc(s.name)}</h2>
           ${s.place ? `<div class="mp-subtitle">${esc(s.place).split("")[0].toUpperCase() + esc(s.place).slice(1)}</div>` : ""}
         </div>
         <div class="mp-info-list">${iconRow("target", null, `<span class="mp-mono">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>`)}</div>
-      `;
+      `,
+      );
       return;
     }
 
-    panelBody.innerHTML = [
-      renderPhotoStrip(p),
-      renderTitleBlock(p, s),
-      renderRatingStatus(p),
-      renderActions(p, lat, lng),
-      renderInfoRows(p),
-      renderHours(p),
-      renderDescription(p),
-      renderReviews(p),
-    ]
-      .filter(Boolean)
-      .join("");
+    swapBody(
+      [
+        renderPhotoStrip(p),
+        renderTitleBlock(p, s),
+        renderRatingStatus(p),
+        renderActions(p, lat, lng),
+        renderInfoRows(p),
+        renderHours(p),
+        renderDescription(p),
+        renderReviews(p),
+      ]
+        .filter(Boolean)
+        .join(""),
+    );
 
     panelBody.querySelectorAll(".mp-photo-tile").forEach((el) => {
-      el.addEventListener("click", () => openLightbox(el.dataset.full));
+      const img = el.querySelector("img");
+      const loaded = () => img.classList.add("loaded");
+      if (img.complete && img.naturalWidth) loaded();
+      else img.addEventListener("load", loaded, { once: true });
+      el.addEventListener("click", () => openLightbox(el));
     });
   }
 
   const lightbox = document.getElementById("map-lightbox");
   const lightboxImg = document.getElementById("map-lightbox-img");
-  function openLightbox(src) {
-    lightboxImg.src = src;
+  let lightboxOrigin = null;
+  async function openLightbox(tile) {
+    lightboxOrigin = tile;
+    lightboxImg.src = tile.dataset.full;
     lightbox.classList.add("open");
+    if (!motion.matches) return;
+    lightboxImg.style.opacity = "0";
+    try {
+      await lightboxImg.decode();
+    } catch {
+      lightboxImg.style.opacity = "";
+      return;
+    }
+    lightboxImg.style.opacity = "";
+    if (!lightbox.classList.contains("open")) return;
+    const from = tile.getBoundingClientRect();
+    const to = lightboxImg.getBoundingClientRect();
+    if (!to.width || !to.height) return;
+    const scale = Math.max(from.width / to.width, from.height / to.height);
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    const insetX = Math.max(0, (to.width - from.width / scale) / 2);
+    const insetY = Math.max(0, (to.height - from.height / scale) / 2);
+    lightboxImg.animate(
+      [
+        {
+          transform: `translate(${dx}px, ${dy}px) scale(${scale})`,
+          clipPath: `inset(${insetY}px ${insetX}px round ${6 / scale}px)`,
+        },
+        { transform: "none", clipPath: "inset(0px 0px round 8px)" },
+      ],
+      { duration: 420, easing: "cubic-bezier(0.32, 0.72, 0, 1)" },
+    );
   }
-  lightbox.onclick = () => lightbox.classList.remove("open");
+  function closeLightbox() {
+    if (!lightbox.classList.contains("open")) return;
+    lightbox.classList.remove("open");
+    lightboxOrigin?.focus({ preventScroll: true });
+    lightboxOrigin = null;
+  }
+  lightbox.onclick = closeLightbox;
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") lightbox.classList.remove("open");
+    if (e.key === "Escape") closeLightbox();
   });
 
   const backBtn = document.getElementById("mp-back");

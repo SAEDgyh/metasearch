@@ -2,6 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      try {
+        const d = document.documentElement,
+          L = localStorage;
+        const a = L.getItem("ms-accent");
+        if (a) d.style.setProperty("--blue", a);
+        if (L.getItem("ms-theme") === "amoled") d.dataset.theme = "amoled";
+        const m = L.getItem("ms-mascot");
+        if (m && m !== "teto") {
+          d.dataset.mascot = m;
+          addEventListener("DOMContentLoaded", () => {
+            const f = document.querySelector("link[rel~=icon]");
+            if (f) f.href = `/s/${m}.png`;
+          });
+        }
+      } catch {}
+    </script>
     <script
       defer
       data-domain="search.tiago.zip"
@@ -76,12 +93,42 @@
         --sh-keyword: #89b4fa;
         --sh-comment: #6c7086;
         --text: #cdd6f4;
+        --heading: #e5e9f8;
         --bg: #1f1e2e;
         --surface0: #313244;
         --surface1: #45475a;
         --subtext: #a6adc8;
         --blue: #89b4fa;
         --muted: #7f849c;
+        --green: #a6e3a1;
+        --line: color-mix(in srgb, var(--surface0) 85%, transparent);
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+        --ease-spring: cubic-bezier(0.22, 1.02, 0.3, 1);
+      }
+
+      :root[data-theme="amoled"] {
+        --bg: #000;
+        --surface0: #131318;
+        --surface1: #222228;
+      }
+
+      :root[data-mascot="spongebob"] {
+        --blue: #f4c842;
+      }
+      :root[data-mascot="gumi"] {
+        --blue: #a6e3a1;
+      }
+      :root[data-mascot="miku"] {
+        --blue: #4fd6c6;
+      }
+      :root[data-mascot="ralsei"] {
+        --blue: #3ecf8e;
+      }
+
+      :root.no-transitions *:not(.toggle-track),
+      :root.no-transitions *:not(.toggle-track)::before,
+      :root.no-transitions *:not(.toggle-track)::after {
+        transition: none !important;
       }
 
       html {
@@ -107,6 +154,10 @@
         min-height: 100vh;
         flex-direction: column;
         overflow-x: hidden;
+      }
+
+      ::selection {
+        background: color-mix(in srgb, var(--blue) 30%, transparent);
       }
 
       h1,
@@ -138,8 +189,8 @@
         margin-top: 15px;
 
         @media (max-width: 800px) {
-          padding-left: 12px;
-          padding-right: 12px;
+          padding-left: 16px;
+          padding-right: 16px;
         }
       }
 
@@ -152,14 +203,17 @@
           background-color: var(--surface0);
           border: 1px solid #7f849c78;
           width: 100%;
-          border-radius: 6px;
+          border-radius: 10px;
           display: flex;
           max-width: 672px;
           cursor: text;
+          transition:
+            border-color 150ms var(--ease-out),
+            box-shadow 200ms var(--ease-out);
 
           &:has(input:focus) {
-            border-color: #bac2de;
-            outline: rgb(186, 194, 222) 0.5px solid;
+            border-color: color-mix(in srgb, var(--blue) 45%, #bac2de);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 16%, transparent);
           }
 
           input {
@@ -171,6 +225,7 @@
             font-size: 1em;
             font-family: inherit;
             color: var(--text);
+            caret-color: var(--blue);
 
             &:focus {
               outline: none;
@@ -185,21 +240,47 @@
           button {
             aspect-ratio: 1;
             height: 100%;
-            border-radius: 13.6px;
+            border-radius: 8px;
             border: none;
             background-color: transparent;
             cursor: pointer;
             display: flex;
             align-items: center;
-            color: var(--text);
+            color: var(--subtext);
             transform: scale(0.9);
             justify-content: center;
+            transition:
+              color 100ms var(--ease-out),
+              scale 200ms var(--ease-out);
 
             svg {
               width: 20px;
               height: 28px;
             }
+
+            &:active {
+              scale: 0.92;
+            }
+
+            &:focus-visible {
+              outline: 2px solid var(--blue);
+              outline-offset: -2px;
+            }
           }
+
+          &:has(input:focus) button {
+            color: var(--text);
+          }
+        }
+      }
+
+      @media (hover: hover) {
+        .search-container .search-bar:not(:has(input:focus)):hover {
+          border-color: #7f849cb0;
+        }
+
+        .search-container .search-bar button:hover {
+          color: var(--text);
         }
       }
 
@@ -211,12 +292,12 @@
         padding-left: 18px;
         padding-right: 18px;
         gap: 58px;
-        margin-top: 12px;
-        margin-bottom: 3em;
+        margin-top: 20px;
+        margin-bottom: 4em;
 
         @media (max-width: 800px) {
-          padding-left: 12px;
-          padding-right: 12px;
+          padding-left: 16px;
+          padding-right: 16px;
           flex-direction: column-reverse;
           gap: 32px;
         }
@@ -227,10 +308,19 @@
         display: block;
         width: 100%;
         color: var(--text);
-        line-height: 28px;
+        font-size: 16px;
+        line-height: 1.7;
 
         @media (max-width: 800px) {
           max-width: 100%;
+        }
+
+        > :first-child {
+          margin-top: 0;
+        }
+
+        p {
+          margin: 0 0 14px;
         }
 
         strong {
@@ -243,116 +333,151 @@
 
         h1,
         h2,
-        h3 {
-          line-height: 1.3;
+        h3,
+        b {
+          color: var(--heading);
         }
 
         h1 {
-          font-size: 24px;
+          font-size: 28px;
+          line-height: 1.2;
+          font-weight: 600;
+          letter-spacing: -0.02em;
+          margin: 8px 0 12px;
         }
 
         h2 {
-          font-size: 17px;
-          margin-top: 1.8rem;
+          font-size: 16.5px;
+          line-height: 1.35;
           font-weight: 600;
-          margin-bottom: -10px;
+          margin: 28px 0 6px;
         }
 
         .bigh2 {
-          margin: 48px 0 16px;
-          border-top: 1px solid #e5e9f824;
-          padding-top: 24px;
+          margin: 52px 0 14px;
+          border-top: 1px solid var(--line);
+          padding-top: 28px;
           letter-spacing: -0.02em;
-          line-height: 32px;
-          font-size: 24px;
+          line-height: 1.3;
+          font-size: 22px;
+          scroll-margin-top: 16px;
+        }
+
+        h1 + .bigh2 {
+          margin-top: 28px;
+        }
+
+        .bigh2 + h2 {
+          margin-top: 20px;
         }
 
         h3 {
-          font-size: 17px;
+          font-size: 15px;
+          line-height: 1.4;
           font-weight: 600;
-          margin-bottom: -10px;
-          margin-top: 22px;
-        }
-
-        h1,
-        h2,
-        h3,
-        b {
-          color: #e5e9f8;
+          margin: 26px 0 8px;
         }
 
         a {
           color: var(--blue);
-          text-decoration: underline;
+          text-decoration-line: underline;
+          text-decoration-thickness: 1px;
+          text-decoration-color: color-mix(in srgb, var(--blue) 40%, transparent);
+          text-underline-position: from-font;
+          text-underline-offset: 3px;
+          text-decoration-skip-ink: auto;
+          border-radius: 3px;
+          transition: text-decoration-color 150ms var(--ease-out);
 
-          &:hover {
-            text-decoration: none;
+          &:focus-visible {
+            outline: 2px solid var(--blue);
+            outline-offset: 2px;
+          }
+        }
+
+        @media (hover: hover) {
+          a:hover {
+            text-decoration-color: var(--blue);
+          }
+        }
+
+        .h-anchor {
+          margin-left: 8px;
+          color: var(--muted);
+          text-decoration: none;
+          font-weight: 500;
+          opacity: 0;
+          transition:
+            opacity 150ms var(--ease-out),
+            color 100ms var(--ease-out);
+
+          &:focus-visible {
+            opacity: 1;
+          }
+        }
+
+        @media (hover: hover) {
+          h2:hover .h-anchor {
+            opacity: 1;
+          }
+
+          .h-anchor:hover {
+            color: var(--blue);
           }
         }
 
         code {
-          background: rgba(255, 255, 255, 0.06);
-          padding: 0.15em 0.35em;
-          border-radius: 4px;
-          font-family: ui-monospace, SFMono-Regular, monospace;
-          font-size: 0.9em;
+          background: color-mix(in srgb, var(--surface0) 75%, transparent);
+          padding: 0.12em 0.38em;
+          border-radius: 5px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-size: 0.86em;
+          color: var(--heading);
         }
 
         pre {
-          background: rgba(0, 0, 0, 0.35);
-          padding: 12px;
-          border-radius: 6px;
+          background: color-mix(in srgb, var(--surface0) 40%, var(--bg));
+          padding: 14px 16px;
+          border-radius: 12px;
+          box-shadow: 0 0 0 1px var(--line);
           overflow-x: auto;
-          margin: 1em 0;
+          margin: 12px 0 18px;
+          font-size: 13.5px;
+          line-height: 1.65;
+          scrollbar-width: thin;
 
           code {
             background: none;
             padding: 0;
-            font-size: 0.9em;
-            position: relative;
+            font-size: inherit;
+            color: var(--text);
           }
         }
 
         ul,
         ol {
-          padding-left: 1.4em;
-          margin: 0.75em 0;
-          margin-top: 20px;
+          padding-left: 1.3em;
+          margin: 8px 0 18px;
           display: flex;
           flex-direction: column;
+          gap: 4px;
         }
 
         li {
-          margin: 0.3em 0;
-          margin-bottom: -1px;
+          margin: 0;
+          padding-left: 2px;
+
+          &::marker {
+            color: var(--muted);
+          }
 
           b {
             font-weight: 500;
           }
         }
 
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          margin: 1.2em 0;
-          font-size: 0.95em;
-        }
-
-        th,
-        td {
-          text-align: left;
-          padding: 8px 10px;
-          border-bottom: 1px solid #e5e9f824;
-          vertical-align: top;
-        }
-
-        th {
-          color: #e5e9f8;
-          font-weight: 600;
-        }
-
         blockquote {
-          border-left: 3px solid #a6e3a1;
+          border-left: 3px solid var(--green);
           padding-left: 12px;
           margin: 1em 0;
           opacity: 0.9;
@@ -364,6 +489,136 @@
         font-display: swap;
         src: url("/s/inter-var-v4.woff2");
       }
+
+      .table-wrap {
+        overflow-x: auto;
+        margin: 12px 0 20px;
+        scrollbar-width: thin;
+      }
+
+      main table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 15px;
+        line-height: 1.55;
+      }
+
+      main th,
+      main td {
+        text-align: left;
+        padding: 9px 16px 9px 0;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+
+      main th:last-child,
+      main td:last-child {
+        padding-right: 0;
+      }
+
+      main th {
+        color: var(--subtext);
+        font-size: 13.5px;
+        font-weight: 500;
+        padding-top: 0;
+        border-bottom-color: var(--surface1);
+      }
+
+      main tbody tr:last-child td {
+        border-bottom: none;
+      }
+
+      main td:first-child code {
+        white-space: nowrap;
+      }
+
+      main td:nth-child(2):not(:last-child) {
+        color: var(--subtext);
+        white-space: nowrap;
+      }
+
+      .code-block {
+        position: relative;
+        margin: 12px 0 18px;
+
+        pre {
+          margin: 0;
+          padding-right: 48px;
+        }
+      }
+
+      .copy {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        transition:
+          background-color 150ms var(--ease-out),
+          color 150ms var(--ease-out),
+          scale 200ms var(--ease-out);
+
+        &:active {
+          scale: 0.94;
+        }
+
+        &:focus-visible {
+          outline: 2px solid var(--blue);
+          outline-offset: -2px;
+        }
+
+        svg {
+          grid-area: 1 / 1;
+          width: 16px;
+          height: 16px;
+          transition:
+            opacity 200ms var(--ease-out),
+            scale 200ms var(--ease-out),
+            filter 200ms var(--ease-out);
+        }
+
+        .icon-done {
+          opacity: 0;
+          scale: 0.25;
+          filter: blur(4px);
+          color: var(--green);
+        }
+
+        &.copied {
+          .icon-copy {
+            opacity: 0;
+            scale: 0.25;
+            filter: blur(4px);
+          }
+
+          .icon-done {
+            opacity: 1;
+            scale: 1;
+            filter: blur(0);
+          }
+        }
+      }
+
+      @media (hover: hover) {
+        .copy:hover {
+          background: var(--surface0);
+          color: var(--text);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .copy svg {
+          transition-property: opacity;
+        }
+      }
     </style>
     <link rel="preload" href="/s/inter-var-v4.woff2" as="font" type="font/woff2" crossorigin />
   </head>
@@ -372,7 +627,7 @@
       <form action="/">
         <div class="search-container">
           <div class="search-bar">
-            <input name="q" value="" placeholder="search…" />
+            <input name="q" value="" placeholder="search…" aria-label="search" />
 
             <button title="search!" type="submit">
               <svg
@@ -398,7 +653,7 @@
       <main>
         <h1>JSON API</h1>
 
-        <h2 class="bigh2">making a request</h2>
+        <h2 class="bigh2" id="request">making a request</h2>
         <p>send a <code>POST</code> to <code>/api</code> with a JSON body.</p>
         <pre><code>POST /api
 Content-Type: application/json
@@ -410,7 +665,7 @@ Content-Type: application/json
 }</code></pre>
 
         <h3>request fields</h3>
-        <table>
+        <div class="table-wrap"><table>
           <thead>
             <tr>
               <th>field</th>
@@ -441,9 +696,9 @@ Content-Type: application/json
               </td>
             </tr>
           </tbody>
-        </table>
+        </table></div>
 
-        <h2 class="bigh2">examples</h2>
+        <h2 class="bigh2" id="examples">examples</h2>
         <h3>curl</h3>
         <pre><code>curl -X POST https://search.tiago.zip/api \
   -H "Content-Type: application/json" \
@@ -461,7 +716,7 @@ Content-Type: application/json
 const data = await res.json();
 console.log(data.results);</code></pre>
 
-        <h2 class="bigh2">responses</h2>
+        <h2 class="bigh2" id="responses">responses</h2>
         <p>
           every successful response returns an object with <code>query</code>, <code>type</code>,
           <code>page</code>, along with <code>more_results_available</code> and the main <code>results</code> object.
@@ -550,18 +805,18 @@ console.log(data.results);</code></pre>
   ]
 }</code></pre>
 
-        <h2 class="bigh2">pagination</h2>
+        <h2 class="bigh2" id="pagination">pagination</h2>
         <p>
           start at <code>page: 0</code>. if the response has
           <code>more_results_available: true</code>, request <code>page: 1</code>, then
           <code>2</code>, and so on. when it is <code>false</code> there is nothing more to fetch.
         </p>
 
-        <h2 class="bigh2">errors</h2>
+        <h2 class="bigh2" id="errors">errors</h2>
         <p>
           errors are returned as JSON with an <code>error</code> string and a matching status code.
         </p>
-        <table>
+        <div class="table-wrap"><table>
           <thead>
             <tr>
               <th>status</th>
@@ -581,15 +836,15 @@ console.log(data.results);</code></pre>
               <td>the upstream search failed.</td>
             </tr>
           </tbody>
-        </table>
+        </table></div>
         <pre><code>{ "error": "missing required field: query" }</code></pre>
 
-        <h2 class="bigh2">autocomplete (<code>/suggest</code>)</h2>
+        <h2 class="bigh2" id="suggest">autocomplete (<code>/suggest</code>)</h2>
         <p>send a <code>GET</code> to <code>/suggest</code> with a partial query.</p>
         <pre><code>GET /suggest?q=weath</code></pre>
 
         <h3>query parameters</h3>
-        <table>
+        <div class="table-wrap"><table>
           <thead>
             <tr>
               <th>param</th>
@@ -604,7 +859,7 @@ console.log(data.results);</code></pre>
               <td>required. the partial query to complete, up to 100 characters.</td>
             </tr>
           </tbody>
-        </table>
+        </table></div>
 
         <h3>response</h3>
         <p>
@@ -626,7 +881,7 @@ console.log(data.results);</code></pre>
     }
   ]
 }</code></pre>
-        <table>
+        <div class="table-wrap"><table>
           <thead>
             <tr>
               <th>field</th>
@@ -666,11 +921,64 @@ console.log(data.results);</code></pre>
               <td>thumbnail URL, when one is available.</td>
             </tr>
           </tbody>
-        </table>
+        </table></div>
 
         <h3>curl</h3>
         <pre><code>curl "https://search.tiago.zip/suggest?q=weath"</code></pre>
       </main>
     </div>
+    <script type="module">
+      for (const h of document.querySelectorAll("main h2[id]")) {
+        const a = document.createElement("a");
+        a.className = "h-anchor";
+        a.href = `#${h.id}`;
+        a.textContent = "#";
+        a.setAttribute("aria-label", `link to ${h.textContent}`);
+        h.append(a);
+      }
+
+      const icon = (cls, d) =>
+        `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+      const icons =
+        icon(
+          "icon-copy",
+          '<rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path>',
+        ) + icon("icon-done", '<path d="M5 12.5l4.5 4.5L19 7.5"></path>');
+
+      const { highlight } = await import("/s/sugar-high.js");
+      for (const pre of document.querySelectorAll("main pre")) {
+        const code = pre.querySelector("code");
+        if (!code) continue;
+        const text = code.textContent;
+        if (!/^(curl|GET|POST)\b/.test(text)) code.innerHTML = highlight(text);
+
+        const wrap = document.createElement("div");
+        wrap.className = "code-block";
+        pre.before(wrap);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "copy";
+        btn.setAttribute("aria-label", "copy code");
+        btn.innerHTML = icons;
+        wrap.append(pre, btn);
+
+        let timer = 0;
+        btn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            return;
+          }
+          btn.classList.add("copied");
+          btn.setAttribute("aria-label", "copied");
+          clearTimeout(timer);
+          timer = setTimeout(() => {
+            btn.classList.remove("copied");
+            btn.setAttribute("aria-label", "copy code");
+          }, 1600);
+        });
+      }
+    </script>
+    <script src="/s/omnibox.js" type="module"></script>
   </body>
 </html>

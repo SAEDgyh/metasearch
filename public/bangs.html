@@ -2,6 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      try {
+        const d = document.documentElement,
+          L = localStorage;
+        const a = L.getItem("ms-accent");
+        if (a) d.style.setProperty("--blue", a);
+        if (L.getItem("ms-theme") === "amoled") d.dataset.theme = "amoled";
+        const m = L.getItem("ms-mascot");
+        if (m && m !== "teto") {
+          d.dataset.mascot = m;
+          addEventListener("DOMContentLoaded", () => {
+            const f = document.querySelector("link[rel~=icon]");
+            if (f) f.href = `/s/${m}.png`;
+          });
+        }
+      } catch {}
+    </script>
     <script defer data-domain="search.tiago.zip" src="https://palantir.estrogen.delivery/Pn7xQk2.privacy.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>bangs / search.tiago.zip</title>
@@ -63,19 +80,43 @@
           "Helvetica Neue",
           sans-serif;
         --text: #cdd6f4;
+        --heading: #e5e9f8;
         --bg: #1f1e2e;
         --surface0: #313244;
-        --card-bg: #1e1e2e;
-        --card-hover: #262738;
+        --surface1: #45475a;
         --subtext: #a6adc8;
         --blue: #89b4fa;
         --muted: #7f849c;
-        --border: #45475a;
+        --red: #f38ba8;
+        --card-bg: color-mix(in srgb, var(--surface0) 45%, var(--bg));
+        --line: color-mix(in srgb, var(--surface0) 85%, transparent);
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      }
+
+      :root[data-theme="amoled"] {
+        --bg: #000;
+        --surface0: #131318;
+        --surface1: #222228;
+        --card-bg: #0a0a0d;
+      }
+
+      :root[data-mascot="spongebob"] {
+        --blue: #f4c842;
+      }
+      :root[data-mascot="gumi"] {
+        --blue: #a6e3a1;
+      }
+      :root[data-mascot="miku"] {
+        --blue: #4fd6c6;
+      }
+      :root[data-mascot="ralsei"] {
+        --blue: #3ecf8e;
       }
 
       html {
         text-rendering: optimizeLegibility;
         -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
         text-size-adjust: 100%;
         scrollbar-width: thin;
         scrollbar-color: hsla(255 0 255 / 15%) var(--bg);
@@ -92,235 +133,301 @@
         min-height: 100vh;
         flex-direction: column;
         overflow-x: hidden;
+      }
 
-        header {
-          max-width: 1136px;
-          margin: 15px auto 0;
-          width: 100%;
-          padding: 0 18px;
-          display: flex;
-          flex-direction: column;
+      header {
+        max-width: 1136px;
+        margin: 15px auto 0;
+        width: 100%;
+        padding: 0 18px;
+        display: flex;
+        flex-direction: column;
 
-          .search-container {
-            display: flex;
-            gap: 24px;
+        @media (max-width: 800px) {
+          padding: 0 16px;
+        }
+      }
 
-            .search-bar {
-              height: 40px;
-              background-color: var(--surface0);
-              border: 1px solid #7f849c78;
-              width: 100%;
-              border-radius: 6px;
-              display: flex;
-              max-width: 672px;
-              cursor: text;
+      .search-bar {
+        height: 40px;
+        background-color: var(--surface0);
+        border: 1px solid #7f849c78;
+        width: 100%;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        max-width: 672px;
+        cursor: text;
+        transition:
+          border-color 150ms var(--ease-out),
+          box-shadow 200ms var(--ease-out);
 
-              &:has(input:focus) {
-                border-color: #bac2de;
-                outline: rgb(186, 194, 222) 0.5px solid;
-              }
+        &:has(input:focus) {
+          border-color: color-mix(in srgb, var(--blue) 45%, #bac2de);
+          box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 16%, transparent);
+        }
 
-              input {
-                background-color: transparent;
-                border: none;
-                height: 100%;
-                width: 100%;
-                padding: 0 10px 0 0;
-                font-size: 1em;
-                font-family: inherit;
-                color: var(--text);
+        .search-icon {
+          flex: none;
+          width: 38px;
+          height: 100%;
+          display: grid;
+          place-items: center;
+          color: var(--muted);
+          cursor: text;
+          transition: color 100ms var(--ease-out);
 
-                &:focus {
-                  outline: none;
-                }
-
-                &::placeholder {
-                  color: var(--muted);
-                  user-select: none;
-                }
-              }
-
-              button {
-                aspect-ratio: 1;
-                height: 100%;
-                border-radius: 13.6px;
-                border: none;
-                background-color: transparent;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                color: var(--text);
-                transform: scale(0.9);
-                justify-content: center;
-
-                svg {
-                  width: 20px;
-                  height: 28px;
-                }
-              }
-            }
+          svg {
+            width: 18px;
+            height: 18px;
           }
         }
 
-        .body {
-          max-width: 1136px;
-          margin: 0 auto;
-          display: flex;
+        &:has(input:focus) .search-icon {
+          color: var(--subtext);
+        }
+
+        input {
+          background-color: transparent;
+          border: none;
+          height: 100%;
           width: 100%;
-          padding: 0 18px 40px 18px;
-          flex-direction: column;
+          padding: 0 10px 0 0;
+          font-size: 1em;
+          font-family: inherit;
+          color: var(--text);
+          caret-color: var(--blue);
 
-          main {
-            width: 100%;
-            color: var(--text);
-            max-width: 672px;
-
-            .loader {
-              display: flex;
-              align-items: center;
-              gap: 12px;
-              color: var(--subtext);
-              padding: 10px 0px;
-
-              svg {
-                animation: spin 0.8s linear infinite;
-              }
-            }
-
-            .bang-results {
-              display: grid;
-              grid-template-columns: 1fr 1fr;
-              gap: 12px;
-              margin-top: 20px;
-
-              @media (max-width: 700px) {
-                grid-template-columns: 1fr;
-              }
-
-              .bang {
-                display: flex;
-                gap: 12px;
-                padding: 8px 12px;
-                border-radius: 12px;
-                align-items: center;
-                overflow: hidden;
-                cursor: default;
-                text-decoration: none;
-                color: inherit;
-                background: var(--card-hover);
-
-                .bang-icon {
-                  background-color: var(--surface0);
-                  outline: 2px solid var(--surface0);
-                  outline-offset: -1px;
-                  border-radius: 7px;
-                  width: 32px;
-                  height: 32px;
-                  min-width: 32px;
-                  position: relative;
-                  user-select: none;
-
-                  & > * {
-                    width: 32px;
-                    height: 32px;
-                    aspect-ratio: 1/1;
-                    border-radius: 7px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    object-fit: cover;
-                    animation: fade-in 0.2s backwards;
-                  }
-
-                  & > .failed {
-                    color: var(--muted);
-                    opacity: 0.8;
-
-                    svg {
-                      width: 21px;
-                      height: 21px;
-                    }
-                  }
-
-                  & > .shimmer {
-                    --shimmer-size: 120px;
-                    background-image: linear-gradient(
-                      -60deg,
-                      rgba(0, 0, 0, 0) 40%,
-                      var(--border) 50%,
-                      rgba(0, 0, 0, 0) 60%
-                    );
-                    background-repeat: no-repeat;
-                    animation: svelte-shimmer 1.5s infinite linear;
-                    background-size: var(--shimmer-size) 100%;
-                  }
-                }
-
-                .bang-info {
-                  width: 100%;
-                  overflow: hidden;
-                  display: flex;
-                  flex-direction: column;
-                  gap: 2px;
-
-                  .bang-title {
-                    font-size: 16px;
-                    white-space: nowrap;
-                    -webkit-mask-image: linear-gradient(to right, #000 90%, #0000);
-                    mask-image: linear-gradient(to right, #000 90%, #0000);
-                    font-weight: 500;
-                  }
-
-                  .bang-triggers {
-                    font-size: 15px;
-                    color: var(--blue);
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                  }
-
-                  .bang-url {
-                    color: var(--subtext);
-                    font-size: 13px;
-                    text-decoration: none;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-
-                    &:hover {
-                      text-decoration: underline;
-                      color: var(--blue);
-                    }
-                  }
-                }
-              }
-
-              .poweredBy {
-                display: flex;
-                align-items: center;
-                gap: 6px;
-                text-decoration: none;
-                color: var(--text);
-                margin-top: 12px;
-                width: fit-content;
-                transition: transform 0.2s;
-
-                @media (hover: hover) and (pointer: fine) {
-                  &:hover {
-                    transform: scale(1.03);
-                  }
-                }
-                &:active {
-                  transform: scale(0.95);
-                }
-
-                svg {
-                  width: 16px;
-                  height: 16px;
-                }
-              }
-            }
+          &:focus {
+            outline: none;
           }
+
+          &::placeholder {
+            color: var(--muted);
+            user-select: none;
+          }
+        }
+      }
+
+      @media (hover: hover) {
+        .search-bar:not(:has(input:focus)):hover {
+          border-color: #7f849cb0;
+        }
+      }
+
+      .body {
+        max-width: 1136px;
+        margin: 0 auto;
+        display: flex;
+        width: 100%;
+        padding: 0 18px 48px;
+        flex-direction: column;
+
+        @media (max-width: 800px) {
+          padding: 0 16px 40px;
+        }
+      }
+
+      main {
+        width: 100%;
+        color: var(--text);
+        max-width: 672px;
+      }
+
+      .loader {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--subtext);
+        padding: 20px 2px;
+        font-size: 15px;
+
+        p {
+          margin: 0;
+        }
+
+        svg {
+          width: 18px;
+          height: 18px;
+          animation: spin 0.6s linear infinite;
+        }
+
+        &.failed {
+          color: var(--red);
+        }
+      }
+
+      .bang-results {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 16px;
+
+        @media (max-width: 700px) {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .bang {
+        display: flex;
+        gap: 12px;
+        padding: 10px 12px;
+        border-radius: 14px;
+        align-items: center;
+        overflow: hidden;
+        color: inherit;
+        background: var(--card-bg);
+        box-shadow: 0 0 0 1px var(--line);
+      }
+
+      .bang-icon {
+        background-color: var(--surface0);
+        border-radius: 8px;
+        width: 34px;
+        height: 34px;
+        flex: none;
+        position: relative;
+        user-select: none;
+        overflow: hidden;
+
+        & > * {
+          width: 100%;
+          height: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          object-fit: cover;
+          border-radius: inherit;
+        }
+
+        img {
+          outline: 1px solid rgb(255 255 255 / 0.08);
+          outline-offset: -1px;
+        }
+
+        & > .failed {
+          color: var(--muted);
+
+          svg {
+            width: 20px;
+            height: 20px;
+          }
+        }
+
+        & > .shimmer {
+          --shimmer-size: 120px;
+          background-image: linear-gradient(
+            -60deg,
+            rgba(0, 0, 0, 0) 40%,
+            var(--surface1) 50%,
+            rgba(0, 0, 0, 0) 60%
+          );
+          background-repeat: no-repeat;
+          animation: shimmer 1.5s infinite linear;
+          background-size: var(--shimmer-size) 100%;
+        }
+      }
+
+      .bang-info {
+        width: 100%;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        line-height: 1.35;
+      }
+
+      .bang-title {
+        font-size: 15.5px;
+        white-space: nowrap;
+        -webkit-mask-image: linear-gradient(to right, #000 90%, #0000);
+        mask-image: linear-gradient(to right, #000 90%, #0000);
+        font-weight: 500;
+        color: var(--heading);
+      }
+
+      .bang-triggers {
+        font-size: 14px;
+        color: var(--blue);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .bang-url {
+        align-self: flex-start;
+        max-width: 100%;
+        color: var(--subtext);
+        font-size: 13px;
+        text-decoration: underline;
+        text-decoration-color: transparent;
+        text-underline-position: from-font;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        border-radius: 3px;
+        transition:
+          color 100ms var(--ease-out),
+          text-decoration-color 150ms var(--ease-out);
+
+        &:focus-visible {
+          outline: 2px solid var(--blue);
+          outline-offset: 1px;
+        }
+      }
+
+      @media (hover: hover) {
+        .bang-url:hover {
+          color: var(--blue);
+          text-decoration-color: currentColor;
+        }
+      }
+
+      .bangs-empty {
+        grid-column: 1 / -1;
+        padding: 28px 2px;
+        color: var(--subtext);
+        font-size: 15px;
+
+        b {
+          color: var(--heading);
+          font-weight: 500;
+        }
+      }
+
+      .poweredBy {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        text-decoration: none;
+        color: var(--subtext);
+        font-size: 14px;
+        margin-top: 10px;
+        width: fit-content;
+        border-radius: 6px;
+        transition:
+          color 150ms var(--ease-out),
+          scale 200ms var(--ease-out);
+
+        &:active {
+          scale: 0.97;
+        }
+
+        &:focus-visible {
+          outline: 2px solid var(--blue);
+          outline-offset: 2px;
+        }
+
+        svg {
+          width: 14px;
+          height: 14px;
+        }
+      }
+
+      @media (hover: hover) {
+        .poweredBy:hover {
+          color: var(--text);
         }
       }
 
@@ -328,7 +435,7 @@
         display: none !important;
       }
 
-      @keyframes svelte-shimmer {
+      @keyframes shimmer {
         0% {
           background-position: calc(-1 * var(--shimmer-size)) 0;
         }
@@ -343,15 +450,6 @@
         }
       }
 
-      @keyframes fade-in {
-        from {
-          opacity: 0;
-        }
-        to {
-          opacity: 1;
-        }
-      }
-
       @font-face {
         font-family: "InterVar";
         font-display: swap;
@@ -362,30 +460,35 @@
   <body>
     <header>
       <div class="search-container">
-        <div class="search-bar">
-          <button type="button" aria-label="search">
+        <label class="search-bar">
+          <span class="search-icon" aria-hidden="true">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               fill="currentColor"
               viewBox="0 0 24 24"
               aria-hidden="true"
-              class="w-6 h-6"
               focusable="false"
-              style="fill: currentColor"
             >
               <path
                 d="m18.031 16.617 4.283 4.282-1.415 1.415-4.282-4.283A8.96 8.96 0 0 1 11 20c-4.968 0-9-4.032-9-9s4.032-9 9-9 9 4.032 9 9a8.96 8.96 0 0 1-1.969 5.617m-2.006-.742A6.98 6.98 0 0 0 18 11c0-3.867-3.133-7-7-7s-7 3.133-7 7 3.133 7 7 7a6.98 6.98 0 0 0 4.875-1.975z"
               ></path>
             </svg>
-          </button>
-          <input id="searchInput" value="" placeholder="" autocomplete="off" />
-        </div>
+          </span>
+          <input
+            id="searchInput"
+            value=""
+            placeholder="search bangs…"
+            aria-label="search bangs"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </label>
       </div>
     </header>
 
     <div class="body">
       <main>
-        <div id="loader" class="loader">
+        <div id="loader" class="loader" role="status">
           <svg
             aria-hidden="true"
             xmlns="http://www.w3.org/2000/svg"
@@ -400,7 +503,7 @@
           >
             <path d="M12 3a9 9 0 1 0 9 9" />
           </svg>
-          <p>loading bangs...</p>
+          <p>loading bangs…</p>
         </div>
         <div id="results" class="bang-results"></div>
       </main>
@@ -539,7 +642,8 @@
           inputEl.focus();
           performSearch("");
         } catch (e) {
-          loaderEl.innerHTML = `<p style="color:#f38ba8">${e.message}</p>`;
+          loaderEl.classList.add("failed");
+          loaderEl.textContent = `couldn't load bangs: ${e.message}`;
         }
       })();
 
@@ -583,53 +687,90 @@
         renderResults(results, rawQuery);
       }
 
+      const cards = new Map();
+      const easing = "cubic-bezier(0.23, 1, 0.32, 1)";
+      const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+      let rendered = false;
+
+      const poweredBy = document.createElement("a");
+      poweredBy.href = "https://helium.computer/bangs";
+      poweredBy.target = "_blank";
+      poweredBy.rel = "noopener";
+      poweredBy.classList.add("poweredBy");
+      poweredBy.innerHTML = `<svg aria-hidden="true" width="26" height="26" viewBox="0 0 26 26" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12.1555 0.818897C12.1555 0.366633 12.5221 0 12.9744 0C13.4267 0 13.7933 0.366633 13.7933 0.818897V25.1811C13.7933 25.6334 13.4267 26 12.9744 26C12.5221 26 12.1555 25.6334 12.1555 25.1811V0.818897Z" fill="currentColor"></path><path d="M1.51522 2.68744C1.19542 2.36764 1.19542 1.84914 1.51522 1.52934C1.83502 1.20954 2.35352 1.20954 2.67332 1.52934L24.4962 23.3522C24.816 23.672 24.816 24.1905 24.4962 24.5103C24.1764 24.8301 23.6579 24.8301 23.3381 24.5103L1.51522 2.68744Z" fill="currentColor"></path><path d="M23.3381 1.5293C23.6579 1.2095 24.1764 1.2095 24.4962 1.5293C24.816 1.8491 24.816 2.3676 24.4962 2.68739L2.67334 24.5103C2.35354 24.8301 1.83505 24.8301 1.51525 24.5103C1.19545 24.1905 1.19545 23.672 1.51525 23.3522L23.3381 1.5293Z" fill="currentColor"></path><path d="M25.1811 12.2067C25.6334 12.2067 26 12.5733 26 13.0256C26 13.4779 25.6334 13.8445 25.1811 13.8445L0.818897 13.8445C0.366633 13.8445 -1.97691e-08 13.4779 0 13.0256C1.97691e-08 12.5733 0.366633 12.2067 0.818897 12.2067L25.1811 12.2067Z" fill="currentColor"></path></svg><span>bangs by helium</span>`;
+
+      const makeCard = (bang) => {
+        const card = document.createElement("div");
+        card.className = "bang";
+
+        const iconWrap = document.createElement("div");
+        iconWrap.className = "bang-icon";
+
+        const shimmer = document.createElement("div");
+        shimmer.className = "shimmer";
+        iconWrap.appendChild(shimmer);
+
+        fetchIcon(bang).then((url) => {
+          if (url) {
+            const img = document.createElement("img");
+            img.className = "icon";
+            img.alt = "";
+            img.src = url;
+            iconWrap.replaceChildren(img);
+            return;
+          }
+          const failedDiv = document.createElement("div");
+          failedDiv.className = "failed";
+          failedDiv.innerHTML = `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`;
+          iconWrap.replaceChildren(failedDiv);
+        });
+
+        const info = document.createElement("div");
+        info.className = "bang-info";
+
+        const title = document.createElement("div");
+        title.className = "bang-title";
+        title.textContent = bang.name;
+        title.title = bang.name;
+
+        const triggers = document.createElement("div");
+        triggers.className = "bang-triggers";
+
+        const urlLink = document.createElement("a");
+        urlLink.className = "bang-url";
+        urlLink.textContent = bang.urlObj.hostname;
+        urlLink.href = bang.urlObj.origin;
+        urlLink.target = "_blank";
+        urlLink.rel = "noopener noreferrer";
+
+        info.append(title, triggers, urlLink);
+        card.append(iconWrap, info);
+        return { card, triggers };
+      };
+
       function renderResults(bangs, rawQuery) {
-        resultsEl.innerHTML = "";
+        const before = new Map();
+        for (const el of resultsEl.children) {
+          if (el.classList.contains("bang")) before.set(el, el.getBoundingClientRect());
+        }
 
         if (bangs.length === 0) {
-          resultsEl.innerHTML = `<div style="grid-column: 1 / -1; text-align:center; color:var(--subtext); padding:20px;">No results found</div>`;
+          const empty = document.createElement("div");
+          empty.className = "bangs-empty";
+          const q = document.createElement("b");
+          q.textContent = rawQuery.trim();
+          empty.append("no bangs match ", q, ", try a site name or a trigger like !gh");
+          resultsEl.replaceChildren(empty);
           return;
         }
 
-        const frag = document.createDocumentFragment();
-
-        bangs.forEach((bang) => {
-          const card = document.createElement("div");
-          card.className = "bang";
-
-          const iconWrap = document.createElement("div");
-          iconWrap.className = "bang-icon";
-
-          const shimmer = document.createElement("div");
-          shimmer.className = "shimmer";
-          iconWrap.appendChild(shimmer);
-
-          fetchIcon(bang).then((url) => {
-            iconWrap.innerHTML = "";
-
-            if (url) {
-              const img = document.createElement("img");
-              img.className = "icon";
-              img.src = url;
-              iconWrap.appendChild(img);
-            } else {
-              const failedDiv = document.createElement("div");
-              failedDiv.className = "failed";
-              failedDiv.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`;
-              iconWrap.appendChild(failedDiv);
-            }
-          });
-
-          const info = document.createElement("div");
-          info.className = "bang-info";
-
-          const title = document.createElement("div");
-          title.className = "bang-title";
-          title.textContent = bang.name;
-
-          const triggers = document.createElement("div");
-          triggers.className = "bang-triggers";
-          const t = normalize(rawQuery);
+        const t = normalize(rawQuery);
+        const els = bangs.map((bang) => {
+          let entry = cards.get(bang.u);
+          if (!entry) {
+            entry = makeCard(bang);
+            cards.set(bang.u, entry);
+          }
           const sortedTriggers = [...bang.triggers].sort((a, b) => {
             if (a === t) return -1;
             return a.length - b.length;
@@ -638,32 +779,43 @@
             .slice(0, 4)
             .map((x) => `!${x}`)
             .join(", ");
-          triggers.textContent = displayStr + (sortedTriggers.length > 4 ? "..." : "");
-
-          const urlLink = document.createElement("a");
-          urlLink.className = "bang-url";
-          urlLink.textContent = bang.urlObj.hostname;
-          urlLink.href = bang.urlObj.origin;
-          urlLink.target = "_blank";
-          urlLink.rel = "noopener noreferrer";
-
-          info.appendChild(title);
-          info.appendChild(triggers);
-          info.appendChild(urlLink);
-
-          card.appendChild(iconWrap);
-          card.appendChild(info);
-          frag.appendChild(card);
+          entry.triggers.textContent = displayStr + (sortedTriggers.length > 4 ? "…" : "");
+          entry.triggers.title = sortedTriggers.map((x) => `!${x}`).join(", ");
+          return entry.card;
         });
 
-        resultsEl.appendChild(frag);
+        resultsEl.replaceChildren(...els, poweredBy);
 
-        const poweredBy = document.createElement("a");
-        poweredBy.href = "https://helium.computer/bangs";
-        poweredBy.target = "_blank";
-        poweredBy.classList.add("poweredBy");
-        poweredBy.innerHTML = `<svg role="img" aria-label="Helium" width="26" height="26" viewBox="0 0 26 26" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12.1555 0.818897C12.1555 0.366633 12.5221 0 12.9744 0C13.4267 0 13.7933 0.366633 13.7933 0.818897V25.1811C13.7933 25.6334 13.4267 26 12.9744 26C12.5221 26 12.1555 25.6334 12.1555 25.1811V0.818897Z" fill="currentColor"></path><path d="M1.51522 2.68744C1.19542 2.36764 1.19542 1.84914 1.51522 1.52934C1.83502 1.20954 2.35352 1.20954 2.67332 1.52934L24.4962 23.3522C24.816 23.672 24.816 24.1905 24.4962 24.5103C24.1764 24.8301 23.6579 24.8301 23.3381 24.5103L1.51522 2.68744Z" fill="currentColor"></path><path d="M23.3381 1.5293C23.6579 1.2095 24.1764 1.2095 24.4962 1.5293C24.816 1.8491 24.816 2.3676 24.4962 2.68739L2.67334 24.5103C2.35354 24.8301 1.83505 24.8301 1.51525 24.5103C1.19545 24.1905 1.19545 23.672 1.51525 23.3522L23.3381 1.5293Z" fill="currentColor"></path><path d="M25.1811 12.2067C25.6334 12.2067 26 12.5733 26 13.0256C26 13.4779 25.6334 13.8445 25.1811 13.8445L0.818897 13.8445C0.366633 13.8445 -1.97691e-08 13.4779 0 13.0256C1.97691e-08 12.5733 0.366633 12.2067 0.818897 12.2067L25.1811 12.2067Z" fill="currentColor"></path></svg> <span>bangs by helium</a>`;
-        resultsEl.appendChild(poweredBy);
+        const first = !rendered;
+        rendered = true;
+        if (first || reduceMotion.matches) return;
+
+        els.forEach((el) => {
+          const prev = before.get(el);
+          for (const a of el.getAnimations()) a.cancel();
+          if (!prev) {
+            el.animate(
+              [
+                { opacity: 0, translate: "0 6px" },
+                { opacity: 1, translate: "0 0" },
+              ],
+              {
+                duration: 200,
+                easing,
+                fill: "backwards",
+              },
+            );
+            return;
+          }
+          const now = el.getBoundingClientRect();
+          const dx = prev.left - now.left;
+          const dy = prev.top - now.top;
+          if (!dx && !dy) return;
+          el.animate([{ translate: `${dx}px ${dy}px` }, { translate: "0 0" }], {
+            duration: 240,
+            easing,
+          });
+        });
       }
 
       inputEl.addEventListener("input", (e) => performSearch(e.target.value));

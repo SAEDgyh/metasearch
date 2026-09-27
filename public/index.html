@@ -58,6 +58,35 @@
           "Open Sans",
           "Helvetica Neue",
           sans-serif;
+
+        --text: #cdd6f4;
+        --bg: #1f1e2e;
+        --surface0: #313244;
+        --surface1: #45475a;
+        --subtext: #a6adc8;
+        --blue: #89b4fa;
+        --muted: #7f849c;
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+        --ease-spring: cubic-bezier(0.22, 1.02, 0.3, 1);
+      }
+
+      :root[data-theme="amoled"] {
+        --bg: #000;
+        --surface0: #131318;
+        --surface1: #222228;
+      }
+
+      :root[data-mascot="spongebob"] {
+        --blue: #f4c842;
+      }
+      :root[data-mascot="gumi"] {
+        --blue: #a6e3a1;
+      }
+      :root[data-mascot="miku"] {
+        --blue: #4fd6c6;
+      }
+      :root[data-mascot="ralsei"] {
+        --blue: #3ecf8e;
       }
 
       html {
@@ -68,18 +97,10 @@
         -moz-text-size-adjust: 100%;
         -ms-text-size-adjust: 100%;
         text-size-adjust: 100%;
-
-        background-color: #1f1e2e;
-        --text: #cdd6f4;
+        background-color: var(--bg);
+        color: var(--text);
         scrollbar-gutter: stable;
         overflow-x: hidden;
-      }
-
-      :root[data-theme="amoled"] {
-        background-color: #000;
-      }
-      :root[data-theme="amoled"] .search-bar {
-        background-color: #131318;
       }
 
       input,
@@ -93,18 +114,17 @@
         width: 100%;
         margin: 0px;
         padding: 0px;
-        min-height: 100vh;
+        min-height: 100dvh;
         flex-direction: column;
         overflow-x: hidden;
-        height: 100vh;
       }
 
       header {
         max-width: 1136px;
         margin: 0px auto;
         width: 100%;
-        padding-left: 18px;
-        padding-right: 18px;
+        padding-left: 16px;
+        padding-right: 16px;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -114,14 +134,15 @@
         .teto {
           margin-bottom: 2em;
           user-select: none;
-          transition: transform 0.2s;
+          transition: scale 260ms var(--ease-spring);
 
           &.is-on {
             cursor: pointer;
-            transform: scale(1.1);
+            scale: 1.08;
 
             &:active {
-              transform: scale(0.9);
+              scale: 0.94;
+              transition-duration: 160ms;
             }
           }
         }
@@ -137,18 +158,21 @@
         gap: 24px;
 
         .search-bar {
-          height: 40px;
-          background-color: #313244;
+          height: 42px;
+          background-color: var(--surface0);
           border: 1px solid #7f849c78;
           width: 100%;
-          border-radius: 6px;
+          border-radius: 10px;
           display: flex;
           max-width: 672px;
           cursor: text;
+          transition:
+            border-color 150ms var(--ease-out),
+            box-shadow 200ms var(--ease-out);
 
           &:has(input:focus) {
-            border-color: #bac2de;
-            outline: rgb(186, 194, 222) 0.5px solid;
+            border-color: color-mix(in srgb, var(--blue) 45%, #bac2de);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 16%, transparent);
           }
 
           input {
@@ -156,17 +180,18 @@
             border: none;
             height: 100%;
             width: 100%;
-            padding: 0 10px;
+            padding: 0 12px;
             font-size: 1em;
             font-family: inherit;
             color: var(--text);
+            caret-color: var(--blue);
 
             &:focus {
               outline: none;
             }
 
             &::placeholder {
-              color: #7f849c;
+              color: var(--muted);
               user-select: none;
             }
           }
@@ -174,58 +199,78 @@
           button {
             aspect-ratio: 1;
             height: 100%;
-            border-radius: 13.6px;
+            border-radius: 8px;
             border: none;
             background-color: transparent;
             cursor: pointer;
             display: flex;
             align-items: center;
-            color: var(--text);
+            color: var(--subtext);
             transform: scale(0.9);
             justify-content: center;
+            transition:
+              color 100ms var(--ease-out),
+              scale 200ms var(--ease-out);
 
             svg {
               width: 20px;
               height: 28px;
             }
+
+            &:active {
+              scale: 0.92;
+            }
+
+            &:focus-visible {
+              outline: 2px solid var(--blue);
+              outline-offset: -2px;
+            }
           }
+
+          &:has(input:focus) button {
+            color: var(--text);
+          }
+        }
+      }
+
+      @media (hover: hover) {
+        .search-container .search-bar:not(:has(input:focus)):hover {
+          border-color: #7f849cb0;
+        }
+
+        .search-container .search-bar button:hover {
+          color: var(--text);
         }
       }
 
       .links {
         font-size: 15px;
-        margin-top: 14px;
+        margin-top: 16px;
         color: #cdd6f769;
         user-select: none;
+        text-align: center;
+        line-height: 1.6;
 
         a {
           color: var(--text);
-          text-decoration: none;
+          text-decoration: underline;
+          text-decoration-color: transparent;
+          text-decoration-thickness: 1px;
+          text-underline-offset: 4px;
+          text-decoration-skip-ink: auto;
+          border-radius: 4px;
+          transition: text-decoration-color 150ms var(--ease-out);
 
-          &:hover {
-            text-decoration: underline;
-          }
-
-          b {
-            font-weight: 500;
+          &:focus-visible {
+            outline: 2px solid var(--blue);
+            outline-offset: 2px;
           }
         }
       }
 
-      .workers {
-        font-size: 12px;
-        color: #7f849ccc;
-        margin-top: auto;
-        margin-bottom: 5vh;
-        user-select: none;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-
-        svg {
-          width: 24px;
-          height: 24px;
-          margin-top: -3px;
+      @media (hover: hover) {
+        .links a:hover {
+          text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
         }
       }
 
@@ -234,21 +279,25 @@
         align-items: center;
         border: 1px solid #7f849c78;
         padding: 5px 8px;
-        border-radius: 7px;
+        border-radius: 10px;
         margin-top: 3em;
         color: var(--text);
         cursor: pointer;
         padding-right: 13px;
         text-decoration: none;
-        transition: transform 0.2s ease;
+        transition:
+          border-color 150ms var(--ease-out),
+          scale 200ms var(--ease-out);
       }
 
-      .meowing-badge:hover {
-        border-color: #7f849c;
+      @media (hover: hover) {
+        .meowing-badge:hover {
+          border-color: #7f849c;
+        }
       }
 
       .meowing-badge:active {
-        transform: scale(0.97);
+        scale: 0.97;
       }
 
       @font-face {
@@ -312,7 +361,8 @@
     <header>
       <img
         src="/s/teto_big.webp"
-        style="width: 110px; height: 110px"
+        width="110"
+        height="110"
         alt="teto"
         class="teto"
         draggable="false"
@@ -320,7 +370,7 @@
       <form action="/">
         <div class="search-container">
           <div class="search-bar">
-            <input class="searchinput" name="q" placeholder="search…" autofocus />
+            <input class="searchinput" name="q" placeholder="search…" aria-label="search" autofocus />
 
             <button title="search!" type="submit">
               <svg

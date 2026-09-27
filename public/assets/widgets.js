@@ -59,18 +59,142 @@ const CHECK = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" strok
 const COPY = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"/><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1"/></svg>`;
 
 const copyBtn = (getText, title = "copy") => {
-  const b = h("button", { class: "w-copy", title, html: COPY });
+  const b = h("button", {
+    type: "button",
+    class: "w-copy",
+    title,
+    "aria-label": title,
+    html: `<span class="w-copy-ic w-copy-idle">${COPY}</span><span class="w-copy-ic w-copy-ok">${CHECK}</span>`,
+  });
+  let t;
   b.onclick = () => {
-    navigator.clipboard?.writeText(getText());
-    b.innerHTML = CHECK;
+    navigator.clipboard?.writeText(getText()).catch(() => {});
     b.classList.add("done");
-    setTimeout(() => {
-      b.innerHTML = COPY;
-      b.classList.remove("done");
-    }, 1400);
+    clearTimeout(t);
+    t = setTimeout(() => b.classList.remove("done"), 1400);
   };
   return b;
 };
+
+const calmMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const swapIn = (el, text) => {
+  if (text != null) el.textContent = text;
+  if (!el.isConnected) return;
+  el.classList.remove("w-swap");
+  void el.offsetWidth;
+  el.classList.add("w-swap");
+};
+
+const segmented = (label, opts, value, onchange) => {
+  const pairs = opts.map((o) => (Array.isArray(o) ? o : [o, o]));
+  const wrap = h("div", {
+    class: "w-seg",
+    role: "radiogroup",
+    "aria-label": label,
+  });
+  wrap.style.setProperty("--n", pairs.length);
+  const btns = pairs.map(([v, text]) =>
+    h(
+      "button",
+      { class: "w-seg-opt", type: "button", role: "radio", value: v },
+      text,
+    ),
+  );
+  const thumb = h("span", { class: "w-seg-thumb", "aria-hidden": "true" });
+  let cur = 0;
+  const place = () => {
+    const b = btns[cur];
+    if (!b.offsetWidth) return;
+    thumb.style.setProperty("--x", `${b.offsetLeft}px`);
+    thumb.style.setProperty("--w", `${b.offsetWidth}px`);
+    if (!wrap.dataset.ready)
+      requestAnimationFrame(() => {
+        wrap.dataset.ready = "";
+      });
+  };
+  const pick = (i) => {
+    cur = i;
+    wrap.value = pairs[i][0];
+    btns.forEach((b, j) => {
+      b.setAttribute("aria-checked", String(i === j));
+      b.tabIndex = i === j ? 0 : -1;
+    });
+    place();
+  };
+  new ResizeObserver(place).observe(wrap);
+  btns.forEach((b, i) => {
+    b.onclick = () => {
+      if (wrap.value === pairs[i][0]) return;
+      pick(i);
+      onchange(pairs[i][0]);
+    };
+    b.onkeydown = (e) => {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[
+        e.key
+      ];
+      if (!step) return;
+      e.preventDefault();
+      const next = (i + step + btns.length) % btns.length;
+      btns[next].focus();
+      btns[next].click();
+    };
+  });
+  pick(
+    Math.max(
+      0,
+      pairs.findIndex(([v]) => v === value),
+    ),
+  );
+  wrap.append(thumb, ...btns);
+  return wrap;
+};
+
+const slider = ({ value, ...props }) => {
+  const el = h("input", {
+    ...props,
+    type: "range",
+    class: `w-range ${props.class ?? ""}`.trim(),
+  });
+  el.value = value;
+  const set = () =>
+    el.style.setProperty("--p", (el.value - el.min) / (el.max - el.min));
+  set();
+  el.addEventListener("input", set);
+  return el;
+};
+
+const sliderField = (label, input, ...val) =>
+  h(
+    "label",
+    { class: "w-slider-field" },
+    h(
+      "span",
+      { class: "w-slider-head" },
+      h("span", null, label),
+      val.length > 0 && h("output", { class: "w-slider-val" }, ...val),
+    ),
+    input,
+  );
+
+const kvList = (rows, cls) =>
+  h(
+    "dl",
+    { class: cls ? `w-kv ${cls}` : "w-kv" },
+    rows.map(([label, value, { mono, copy } = {}]) =>
+      h(
+        "div",
+        { class: "w-kv-row" },
+        h("dt", null, label),
+        h("dd", { class: mono ? "w-mono" : null }, value),
+        copy &&
+          copyBtn(
+            typeof copy === "function" ? copy : () => String(value),
+            `copy ${label}`,
+          ),
+      ),
+    ),
+  );
 
 let _ac;
 const audio = () => {
@@ -151,8 +275,6 @@ const highlightInto = async (el, code) => {
 const widgets = [];
 const reg = (w) => widgets.push(w);
 
-////// generators //////////////////////////////////////////////////////////////
-
 reg({
   id: "qr",
   match: (q) => {
@@ -164,30 +286,63 @@ reg({
     return { text: m[1].trim() };
   },
   build: ({ text }) => {
-    const input = h("input", {
-      class: "w-input",
-      placeholder: "text or url to encode",
+    const input = h("textarea", {
+      class: "w-textarea w-qr-input",
+      rows: "3",
+      placeholder: "https://example.com",
+      spellcheck: "false",
       value: text,
     });
-    const canvas = h("canvas", { class: "w-qr-canvas" });
-    const dl = h("button", { class: "w-btn", html: "download png" });
+    const canvas = h("canvas", {
+      class: "w-qr-canvas",
+      role: "img",
+      "aria-label": "qr code",
+    });
+    const meta = h("div", { class: "w-qr-meta", role: "status" });
+    const dl = h("button", {
+      type: "button",
+      class: "w-btn primary",
+      html: "download",
+    });
+    const copyImg = h("button", {
+      type: "button",
+      class: "w-btn",
+      html: "copy image",
+    });
     const wrap = h("div", { class: "w-qr-wrap" }, canvas);
+    let ok = false;
     const draw = async () => {
-      const t = input.value || "https://search.tiago.zip";
+      const t = input.value.trim();
       if (!window.qrcode) await loadScript("/s/qrcode.js");
       const qr = window.qrcode(0, "M");
-      qr.addData(t);
-      qr.make();
+      try {
+        qr.addData(t || " ");
+        qr.make();
+      } catch {
+        ok = false;
+        wrap.classList.add("empty");
+        meta.classList.add("err");
+        meta.textContent = "too long for a qr code, try under 2,000 characters";
+        dl.disabled = copyImg.disabled = true;
+        return;
+      }
+      ok = !!t;
+      wrap.classList.toggle("empty", !ok);
+      meta.classList.remove("err");
+      dl.disabled = copyImg.disabled = !ok;
       const n = qr.getModuleCount();
-      const scale = 8,
-        pad = 4,
-        size = (n + pad * 2) * scale;
+      meta.textContent = ok
+        ? `${t.length} ${t.length === 1 ? "character" : "characters"}, ${n}×${n} modules`
+        : "type something to encode";
+      const scale = 8;
+      const pad = 4;
+      const size = (n + pad * 2) * scale;
       canvas.width = size;
       canvas.height = size;
       const ctx = canvas.getContext("2d");
-      ctx.fillStyle = "#cdd6f4";
+      ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, size, size);
-      ctx.fillStyle = "#1e1e2e";
+      ctx.fillStyle = "#11111b";
       for (let r = 0; r < n; r++)
         for (let c = 0; c < n; c++)
           if (qr.isDark(r, c))
@@ -196,9 +351,10 @@ reg({
     let t;
     input.oninput = () => {
       clearTimeout(t);
-      t = setTimeout(draw, 150);
+      t = setTimeout(draw, 120);
     };
     dl.onclick = () => {
+      if (!ok) return;
       const a = h("a", {
         href: canvas.toDataURL("image/png"),
         download: "qrcode.png",
@@ -207,17 +363,45 @@ reg({
       a.click();
       a.remove();
     };
+    let copied;
+    copyImg.onclick = () => {
+      if (!ok) return;
+      canvas.toBlob((blob) => {
+        navigator.clipboard
+          ?.write([new ClipboardItem({ "image/png": blob })])
+          .then(() => {
+            copyImg.textContent = "copied";
+            clearTimeout(copied);
+            copied = setTimeout(() => {
+              copyImg.textContent = "copy image";
+            }, 1400);
+          })
+          .catch(() => {
+            copyImg.textContent = "copy failed";
+          });
+      });
+    };
+    if (!window.ClipboardItem) copyImg.hidden = true;
     draw();
     return card(
       "qr code",
-      "encode any text or link",
-      wrap,
-      input,
+      null,
       h(
         "div",
-        { class: "w-btn-row" },
-        dl,
-        copyBtn(() => input.value || "https://search.tiago.zip", "copy text"),
+        { class: "w-qr" },
+        wrap,
+        h(
+          "div",
+          { class: "w-qr-side" },
+          h(
+            "label",
+            { class: "w-qr-field" },
+            h("span", { class: "w-qr-label" }, "text or link"),
+            input,
+          ),
+          meta,
+          h("div", { class: "w-btn-row w-qr-actions" }, dl, copyImg),
+        ),
       ),
     );
   },
@@ -230,80 +414,129 @@ reg({
       q.trim(),
     ),
   build: () => {
-    const out = h("div", { class: "w-mono w-big w-pw-out" });
-    const lenLabel = h("span", { class: "w-range-val" }, "16");
-    const len = h("input", {
-      class: "w-range",
-      type: "range",
+    const out = h("div", { class: "w-mono w-pw-out" });
+    const lenVal = h("span", null, "16");
+    const len = slider({
       min: "4",
       max: "64",
       value: "16",
     });
-    const opts = {
-      lower: h("input", { type: "checkbox", checked: "" }),
-      upper: h("input", { type: "checkbox", checked: "" }),
-      digits: h("input", { type: "checkbox", checked: "" }),
-      symbols: h("input", { type: "checkbox", checked: "" }),
-      "no ambiguous": h("input", { type: "checkbox" }),
-    };
-    const sets = {
-      lower: "abcdefghijklmnopqrstuvwxyz",
-      upper: "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-      digits: "0123456789",
-      symbols: "!@#$%^&*()-_=+[]{};:,.<>?",
-    };
+    const sets = [
+      ["lower", "lowercase", "abcdefghijklmnopqrstuvwxyz"],
+      ["upper", "uppercase", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
+      ["digits", "numbers", "0123456789"],
+      ["symbols", "symbols", "!@#$%^&*()-_=+[]{};:,.<>?"],
+    ];
+    const boxes = Object.fromEntries(
+      sets.map(([k]) => [k, h("input", { type: "checkbox", checked: "" })]),
+    );
+    const plain = h("input", { type: "checkbox" });
     const ambiguous = /[Il1O0o]/g;
     const strengthBar = h("div", { class: "w-strength-bar" });
-    const strengthLabel = h("span", { class: "w-strength-label" });
-    const gen = () => {
-      let pool = "";
-      for (const k of ["lower", "upper", "digits", "symbols"])
-        if (opts[k].checked) pool += sets[k];
-      if (!pool) pool = sets.lower;
-      if (opts["no ambiguous"].checked) pool = pool.replace(ambiguous, "");
+    const strengthWord = h("span", { class: "w-strength-label" });
+    const strengthBits = h("span", { class: "w-strength-bits" });
+    let scramble;
+    let current = "";
+    const gen = (animate) => {
+      let pool = sets
+        .filter(([k]) => boxes[k].checked)
+        .map(([, , chars]) => chars)
+        .join("");
+      if (plain.checked) pool = pool.replace(ambiguous, "");
       const n = +len.value;
       const arr = new Uint32Array(n);
       crypto.getRandomValues(arr);
-      out.textContent = [...arr].map((x) => pool[x % pool.length]).join("");
+      const pw = [...arr].map((x) => pool[x % pool.length]).join("");
+      cancelAnimationFrame(scramble);
+      current = pw;
+      out.textContent = pw;
+      if (animate === true && !calmMotion()) {
+        const noise = () => pool[Math.floor(Math.random() * pool.length)];
+        let start;
+        const step = (t) => {
+          start ??= t;
+          const settled = Math.floor(((t - start) / 240) * n);
+          if (settled >= n || !out.isConnected) {
+            out.textContent = pw;
+            return;
+          }
+          out.textContent =
+            pw.slice(0, settled) + [...pw.slice(settled)].map(noise).join("");
+          scramble = requestAnimationFrame(step);
+        };
+        scramble = requestAnimationFrame(step);
+      }
       const bits = Math.round(n * Math.log2(pool.length));
       const pct = Math.min(100, (bits / 128) * 100);
-      strengthBar.style.scale = `${pct / 100} 1`;
+      strengthBar.style.scale = `${Math.max(pct, 4) / 100} 1`;
       const word = bits < 50 ? "weak" : bits < 90 ? "good" : "strong";
       strengthBar.dataset.level = word;
-      strengthLabel.dataset.level = word;
-      strengthLabel.textContent = `${word} · ${bits} bits`;
+      strengthWord.dataset.level = word;
+      strengthWord.textContent = word;
+      strengthBits.textContent = `${bits} bits of entropy`;
     };
     len.oninput = () => {
-      lenLabel.textContent = len.value;
+      lenVal.textContent = len.value;
       gen();
     };
-    for (const k in opts) opts[k].onchange = gen;
-    const copy = copyBtn(() => out.textContent);
+    for (const [k] of sets)
+      boxes[k].onchange = () => {
+        if (!sets.some(([j]) => boxes[j].checked)) boxes[k].checked = true;
+        gen(true);
+      };
+    plain.onchange = () => gen(true);
     const regen = h("button", {
-      class: "w-btn primary",
-      html: "regenerate",
-      onclick: gen,
+      type: "button",
+      class: "w-copy w-pw-regen",
+      title: "generate new password",
+      "aria-label": "generate new password",
+      html: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/></svg>`,
+      onclick: () => {
+        regen.classList.remove("spun");
+        void regen.offsetWidth;
+        regen.classList.add("spun");
+        gen(true);
+      },
     });
     gen();
+    const check = (box, text) =>
+      h("label", { class: "w-pw-opt" }, box, h("span", null, text));
     return card(
       "password generator",
-      "cryptographically random, generated in your browser",
+      "random, generated in your browser",
       h(
         "div",
         { class: "w-pw-card" },
-        h("div", { class: "w-pw-row" }, out, copy),
-        h("div", { class: "w-strength" }, strengthBar),
-        h("div", { class: "w-strength-row" }, strengthLabel),
-      ),
-      h("label", { class: "w-label" }, "length: ", lenLabel, len),
-      h(
-        "div",
-        { class: "w-chips" },
-        ...Object.keys(opts).map((k) =>
-          h("label", { class: "w-chk" }, opts[k], k),
+        h(
+          "div",
+          { class: "w-pw-row" },
+          out,
+          h(
+            "div",
+            { class: "w-pw-actions" },
+            regen,
+            copyBtn(() => current),
+          ),
+        ),
+        h(
+          "div",
+          { class: "w-pw-meter" },
+          h("div", { class: "w-strength" }, strengthBar),
+          h("div", { class: "w-strength-row" }, strengthWord, strengthBits),
         ),
       ),
-      h("div", { class: "w-btn-row" }, regen),
+      sliderField("length", len, lenVal),
+      h(
+        "fieldset",
+        { class: "w-pw-sets" },
+        h("legend", null, "include"),
+        h(
+          "div",
+          { class: "w-pw-opts" },
+          ...sets.map(([k, text]) => check(boxes[k], text)),
+        ),
+        check(plain, "avoid look-alikes like 0 and O"),
+      ),
     );
   },
 });
@@ -316,21 +549,41 @@ reg({
     ),
   build: () => {
     const list = h("div", { class: "w-uuid-list" });
-    const make = (n = 5) => {
-      list.replaceChildren();
-      for (let i = 0; i < n; i++) {
-        const u = crypto.randomUUID();
-        list.append(
+    let ids = [];
+    const make = () => {
+      ids = Array.from({ length: 5 }, () => crypto.randomUUID());
+      list.replaceChildren(
+        ...ids.map((u) =>
           h(
             "div",
             { class: "w-uuid-row" },
-            h("span", { class: "w-mono" }, u),
+            h(
+              "span",
+              { class: "w-mono w-uuid-id" },
+              u.slice(0, 19),
+              h("wbr"),
+              u.slice(19),
+            ),
             copyBtn(() => u),
           ),
-        );
-      }
+        ),
+      );
     };
     make();
+    let copied;
+    const copyAll = h("button", {
+      type: "button",
+      class: "w-btn",
+      html: "copy all",
+      onclick: () => {
+        navigator.clipboard?.writeText(ids.join("\n")).catch(() => {});
+        copyAll.textContent = "copied";
+        clearTimeout(copied);
+        copied = setTimeout(() => {
+          copyAll.textContent = "copy all";
+        }, 1400);
+      },
+    });
     return card(
       "uuid generator",
       "version 4, random",
@@ -339,10 +592,15 @@ reg({
         "div",
         { class: "w-btn-row" },
         h("button", {
+          type: "button",
           class: "w-btn primary",
-          html: "generate more",
-          onclick: () => make(),
+          html: "generate new",
+          onclick: () => {
+            make();
+            swapIn(list);
+          },
         }),
+        copyAll,
       ),
     );
   },
@@ -366,46 +624,64 @@ reg({
         { length: n },
         () => words[rand(0, words.length - 1)],
       );
+      if (n > 11) s[rand(3, n - 5)] += ",";
       return `${s[0][0].toUpperCase() + s[0].slice(1)} ${s.slice(1).join(" ")}.`;
     };
     const para = () => Array.from({ length: rand(3, 6) }, sentence).join(" ");
-    const out = h("div", { class: "w-lorem-out" });
-    const countLabel = h("span", { class: "w-range-val" }, "3");
-    const count = h("input", {
-      class: "w-range",
-      type: "range",
+    const opener = "Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
+    const out = h("div", { class: "w-lorem-out", tabindex: "0" });
+    const countVal = h("span", null, "3");
+    const count = slider({
       min: "1",
       max: "10",
       value: "3",
     });
     const gen = () =>
       out.replaceChildren(
-        ...Array.from({ length: +count.value }, () => h("p", null, para())),
+        ...Array.from({ length: +count.value }, (_, i) =>
+          h("p", null, i ? para() : `${opener} ${para()}`),
+        ),
       );
     count.oninput = () => {
-      countLabel.textContent = count.value;
+      countVal.textContent = count.value;
       gen();
     };
     gen();
+    let copied;
+    const copy = h("button", {
+      type: "button",
+      class: "w-btn primary",
+      html: "copy text",
+      onclick: () => {
+        navigator.clipboard
+          ?.writeText([...out.children].map((p) => p.textContent).join("\n\n"))
+          .catch(() => {});
+        copy.textContent = "copied";
+        clearTimeout(copied);
+        copied = setTimeout(() => {
+          copy.textContent = "copy text";
+        }, 1400);
+      },
+    });
     return card(
       "lorem ipsum",
       "placeholder text",
       out,
-      h("label", { class: "w-label" }, "paragraphs: ", countLabel, count),
+      sliderField("paragraphs", count, countVal),
       h(
         "div",
         { class: "w-btn-row" },
-        copyBtn(
-          () => [...out.children].map((p) => p.textContent).join("\n\n"),
-          "copy text",
-        ),
-        h("button", { class: "w-btn", html: "shuffle", onclick: gen }),
+        copy,
+        h("button", {
+          type: "button",
+          class: "w-btn",
+          html: "new text",
+          onclick: gen,
+        }),
       ),
     );
   },
 });
-
-////// easter eggs /////////////////////////////////////////////////////////////
 
 reg({
   id: "not-furry",
@@ -418,6 +694,8 @@ reg({
       class: "w-notfurry-img",
       src: "https://tiago.zip/assets/img/not-furry.webp",
       alt: "",
+      width: "120",
+      height: "120",
       loading: "lazy",
     });
     const word = h("b", null, "not");
@@ -430,12 +708,11 @@ reg({
     );
     if (Math.random() < 0.1) {
       word.textContent = "absolutely";
-      word.style.color = "var(--green)";
+      word.className = "absolutely";
       setTimeout(() => {
         word.textContent = "not";
-        word.style.color = "";
-        word.classList.add("swapped");
-      }, 300);
+        word.className = "";
+      }, 900);
     }
     return card(null, null, h("div", { class: "w-notfurry" }, img, text));
   },
@@ -448,7 +725,9 @@ const quiz = ({
   sub,
   questions,
   tiers,
-  fmt = (v) => `${v}%`,
+  value = (v) => v,
+  unit,
+  suffix = "%",
 }) => {
   const max = questions.reduce(
     (s, q) => s + Math.max(...q.opts.map((o) => o[1])),
@@ -460,9 +739,30 @@ const quiz = ({
     build: () => {
       let idx = 0;
       let back = false;
+      let busy = false;
       const picks = [];
       const fill = h("div", { class: "w-quiz-fill" });
-      const track = h("div", { class: "w-quiz-track" }, fill);
+      const step = h("span", { class: "w-quiz-step" });
+      const prev = h("button", {
+        type: "button",
+        class: "w-quiz-back",
+        "aria-label": "previous question",
+        html: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6l6 6"/></svg>`,
+        onclick: () => {
+          if (!idx || busy) return;
+          idx--;
+          back = true;
+          picks.pop();
+          show();
+        },
+      });
+      const track = h(
+        "div",
+        { class: "w-quiz-bar" },
+        prev,
+        h("div", { class: "w-quiz-track" }, fill),
+        step,
+      );
       const pane = h("div", { class: "w-quiz-pane" });
       const root = h("div", { class: "w-quiz" }, track, pane);
 
@@ -478,8 +778,26 @@ const quiz = ({
         const score = picks.reduce((s, p) => s + p, 0);
         const pct = Math.round((score / max) * 100);
         const tier = tiers.find((t) => pct <= t.max) ?? tiers[tiers.length - 1];
-        const num = h("div", { class: "w-quiz-pct" }, fmt(0));
-        const gauge = h("div", { class: "w-quiz-gauge" }, num);
+        const num = h("span", { class: "w-quiz-num" }, value(0));
+        const gauge = h(
+          "div",
+          {
+            class: "w-quiz-gauge",
+            role: "img",
+            "aria-label": `${unit ?? ""} ${value(pct)}${suffix ?? ""}`.trim(),
+          },
+          h(
+            "div",
+            { class: "w-quiz-pct", "aria-hidden": "true" },
+            unit && h("span", { class: "w-quiz-unit" }, unit),
+            h(
+              "span",
+              { class: "w-quiz-val" },
+              num,
+              suffix && h("span", { class: "w-quiz-suffix" }, suffix),
+            ),
+          ),
+        );
         gauge.insertAdjacentHTML(
           "afterbegin",
           `<svg viewBox="0 0 100 100" aria-hidden="true"><circle class="w-quiz-ring" cx="50" cy="50" r="44" pathLength="100"/><circle class="w-quiz-ring fg" cx="50" cy="50" r="44" pathLength="100"/></svg>`,
@@ -491,68 +809,55 @@ const quiz = ({
         pane.replaceChildren(
           h(
             "div",
-            { class: "w-quiz-card w-quiz-result" },
+            { class: "w-quiz-card w-quiz-result w-quiz-fwd" },
             gauge,
-            h("div", { class: "w-quiz-verdict" }, tier.title),
-            h("div", { class: "w-quiz-line" }, tier.line),
             h(
               "div",
-              { class: "w-btn-row w-center-row" },
-              h("button", {
-                class: "w-btn",
-                html: "take it again",
-                onclick: restart,
-              }),
+              { class: "w-quiz-copy" },
+              h("div", { class: "w-quiz-verdict" }, tier.title),
+              tier.line && h("div", { class: "w-quiz-line" }, tier.line),
+            ),
+            h(
+              "button",
+              { type: "button", class: "w-btn w-quiz-again", onclick: restart },
+              "take it again",
             ),
           ),
         );
+        if (calmMotion()) {
+          num.textContent = value(pct);
+          return setArc(pct / 100);
+        }
         let start;
         const tick = (t) => {
           start ??= t;
-          const p = Math.min(1, (t - start) / 700);
+          const p = Math.min(1, (t - start) / 480);
           const e = 1 - (1 - p) ** 3;
-          num.textContent = fmt(Math.round(pct * e));
+          num.textContent = value(Math.round(pct * e));
           setArc((pct / 100) * e);
           if (p < 1 && num.isConnected) requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
         setTimeout(() => {
-          num.textContent = fmt(pct);
+          num.textContent = value(pct);
           setArc(pct / 100);
-        }, 750);
+        }, 520);
       };
 
       const show = () => {
         if (idx >= questions.length) return showResult();
-        const dir = back ? "rev" : "fwd";
+        const dir = pane.isConnected ? (back ? "rev" : "fwd") : "still";
         back = false;
+        busy = false;
         track.style.display = "";
-        fill.style.transform = `scaleX(${(idx + 1) / questions.length})`;
+        fill.style.transform = `scaleX(${idx / questions.length})`;
+        prev.disabled = idx === 0;
+        step.textContent = `${idx + 1} of ${questions.length}`;
         const { q, opts } = questions[idx];
         pane.replaceChildren(
           h(
             "div",
             { class: `w-quiz-card w-quiz-${dir}` },
-            h(
-              "div",
-              { class: "w-quiz-top" },
-              idx > 0 &&
-                h("button", {
-                  class: "w-quiz-back",
-                  html: "&larr; back",
-                  onclick: () => {
-                    idx--;
-                    back = true;
-                    picks.pop();
-                    show();
-                  },
-                }),
-              h(
-                "span",
-                { class: "w-quiz-step" },
-                `${idx + 1} of ${questions.length}`,
-              ),
-            ),
             h("div", { class: "w-quiz-q" }, q),
             h(
               "div",
@@ -561,11 +866,16 @@ const quiz = ({
                 h(
                   "button",
                   {
+                    type: "button",
                     class: "w-quiz-opt",
-                    onclick: () => {
+                    onclick: (e) => {
+                      if (busy) return;
+                      busy = true;
                       picks.push(pts);
                       idx++;
-                      show();
+                      e.currentTarget.classList.add("picked");
+                      fill.style.transform = `scaleX(${idx / questions.length})`;
+                      setTimeout(show, calmMotion() ? 0 : 160);
                     },
                   },
                   label,
@@ -782,7 +1092,7 @@ quiz({
     {
       max: 100,
       title: "yeah, probably gay",
-      line: "your answers point pretty clearly toward same-gender attraction.",
+      line: "your answers point pretty clearly toward same\u2011gender attraction.",
     },
   ],
 });
@@ -916,17 +1226,17 @@ quiz({
     {
       max: 49,
       title: "some questions worth sitting with",
-      line: "a few of your answers point somewhere",
+      line: "a few of your answers point somewhere. no rush to figure out where.",
     },
     {
       max: 74,
       title: "there's a real pattern here",
-      line: "plenty of people who answer like this end up somewhere under the trans umbrella",
+      line: "plenty of people who answer like this end up somewhere under the trans umbrella.",
     },
     {
       max: 100,
       title: "you're probably trans",
-      line: "you've probably suspected this for a while",
+      line: "you've probably suspected this for a while.",
     },
   ],
 });
@@ -1074,10 +1384,12 @@ quiz({
     {
       max: 24,
       title: "not a furry",
+      line: "you like animals the normal amount.",
     },
     {
       max: 49,
       title: "furry-adjacent",
+      line: "you have a favorite fox and you've thought about it.",
     },
     {
       max: 74,
@@ -1087,7 +1399,7 @@ quiz({
     {
       max: 100,
       title: "furry",
-      line: "the quiz was a formality",
+      line: "the quiz was a formality.",
     },
   ],
 });
@@ -1097,7 +1409,9 @@ quiz({
   match:
     /^(?:iq\s+test|test\s+my\s+iq|what(?:'s|\s+is)\s+my\s+iq|how\s+smart\s+am\s+i|am\s+i\s+(?:smart|stupid|dumb))\s*\??$/i,
   title: "iq test",
-  fmt: (pct) => `iq ${55 + pct}`,
+  value: (pct) => 55 + pct,
+  unit: "iq",
+  suffix: null,
   questions: [
     {
       q: "you have 3 apples. you take away 2. how many apples do you have?",
@@ -1187,8 +1501,6 @@ quiz({
   ],
 });
 
-////// random / chance /////////////////////////////////////////////////////////
-
 reg({
   id: "coin",
   match: (q) =>
@@ -1199,36 +1511,47 @@ reg({
     const CROWN = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.6l3.2 4.9l4.4 -3.4l-1.7 9.1a1 1 0 0 1 -1 .8h-9.8a1 1 0 0 1 -1 -.8l-1.7 -9.1l4.4 3.4z"/><rect x="5.4" y="17.4" width="13.2" height="2.2" rx="1.1"/></svg>`;
     const STAR = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3.2l2.7 5.6l6.1 .9l-4.4 4.3l1 6.1l-5.4 -2.9l-5.4 2.9l1 -6.1l-4.4 -4.3l6.1 -.9z"/></svg>`;
 
-    const mkFace = (cls, icon, text) =>
-      h(
-        "div",
-        { class: `w-coin-face ${cls}` },
-        h("div", { class: "w-coin-icon", html: icon }),
-        h("div", { class: "w-coin-text" }, text),
-      );
-
     const inner = h(
       "div",
       { class: "w-coin3d-inner" },
-      mkFace("heads", CROWN, "heads"),
-      mkFace("tails", STAR, "tails"),
+      ...[
+        ["heads", CROWN],
+        ["tails", STAR],
+      ].map(([cls, icon]) =>
+        h(
+          "div",
+          { class: `w-coin-face ${cls}` },
+          h("div", { class: "w-coin-icon", html: icon }),
+        ),
+      ),
     );
     const toss = h("div", { class: "w-coin3d-toss" }, inner);
-    const stage = h("div", { class: "w-coin3d" }, toss);
-    const label = h("div", { class: "w-coin-label" }, "flipping…");
-    const tally = h("div", { class: "w-coin-tally" });
+    const shadow = h("div", { class: "w-coin-shadow" });
+    const stage = h(
+      "button",
+      { type: "button", class: "w-coin3d", "aria-label": "flip the coin" },
+      shadow,
+      toss,
+    );
+    const label = h(
+      "div",
+      { class: "w-coin-label", role: "status" },
+      "flipping…",
+    );
+    const headsN = h("span", null, "0");
+    const tailsN = h("span", null, "0");
+    const tally = h(
+      "div",
+      { class: "w-coin-tally" },
+      h("span", null, headsN, " heads"),
+      h("span", { class: "w-coin-dot" }),
+      h("span", null, tailsN, " tails"),
+    );
 
     let rotation = 0;
     let heads = 0;
     let tails = 0;
     let flipping = false;
-
-    const drawTally = () =>
-      tally.replaceChildren(
-        h("span", null, `${heads} heads`),
-        h("span", { class: "w-coin-dot" }),
-        h("span", null, `${tails} tails`),
-      );
 
     const flip = () => {
       if (flipping) return;
@@ -1237,30 +1560,29 @@ reg({
       label.className = "w-coin-label";
 
       const result = Math.random() < 0.5 ? "heads" : "tails";
-      const base = rotation + 3 * 360;
+      const base = rotation + 4 * 360;
       const want = result === "heads" ? 0 : 180;
       let target = base - (base % 360) + want;
       if (target < base) target += 360;
       rotation = target;
 
       inner.style.transform = `rotateX(${rotation}deg)`;
-      toss.classList.remove("tossing");
-      void toss.offsetWidth;
-      toss.classList.add("tossing");
-
-      setTimeout(() => {
-        if (result === "heads") heads++;
-        else tails++;
+      const land = () => {
+        if (result === "heads") swapIn(headsN, ++heads);
+        else swapIn(tailsN, ++tails);
         label.textContent = result;
-        label.className = `w-coin-label ${result}`;
-        drawTally();
+        label.className = `w-coin-label ${result}${stage.isConnected ? " landed" : ""}`;
         flipping = false;
-      }, 560);
+      };
+      if (!stage.isConnected) return land();
+      stage.classList.remove("tossing");
+      void stage.offsetWidth;
+      stage.classList.add("tossing");
+      setTimeout(land, calmMotion() ? 0 : 820);
     };
 
     stage.onclick = flip;
-    drawTally();
-    setTimeout(flip, 350);
+    flip();
 
     return card(
       "coin flip",
@@ -1270,8 +1592,9 @@ reg({
       tally,
       h(
         "div",
-        { class: "w-btn-row" },
+        { class: "w-btn-row w-center-row" },
         h("button", {
+          type: "button",
           class: "w-btn primary",
           html: "flip again",
           onclick: flip,
@@ -1295,30 +1618,99 @@ reg({
     const capped = n > 20;
     n = Math.min(n, 20);
     sides = Math.max(2, sides);
-    const dice = h("div", { class: "w-dice-row" });
-    const total = h("div", { class: "w-dice-total" });
-    const roll = () => {
-      dice.replaceChildren();
-      let sum = 0;
-      for (let i = 0; i < n; i++) {
-        const v = 1 + Math.floor(Math.random() * sides);
-        sum += v;
-        const d = h("div", { class: "w-die" }, v);
-        d.style.animationDelay = `${Math.min(i, 3) * 55}ms`;
-        dice.append(d);
+    const PIPS = [
+      [4],
+      [0, 8],
+      [0, 4, 8],
+      [0, 2, 6, 8],
+      [0, 2, 4, 6, 8],
+      [0, 2, 3, 5, 6, 8],
+    ];
+    const rand = () => 1 + Math.floor(Math.random() * sides);
+    const face = (d, v) => {
+      if (sides !== 6) {
+        d.textContent = v;
+        return;
       }
-      total.textContent = n > 1 ? `total: ${sum}` : "";
+      d.replaceChildren(
+        ...Array.from({ length: 9 }, (_, k) =>
+          h("i", { class: PIPS[v - 1].includes(k) ? "on" : null }),
+        ),
+      );
+    };
+    const dice = h("div", {
+      class: `w-dice-row${sides === 6 ? " pips" : ""}`,
+      role: "img",
+    });
+    const sumEl = h("span", { class: "w-dice-sum" });
+    const total = h(
+      "div",
+      { class: "w-dice-total", role: "status" },
+      h("span", { class: "w-dice-cap" }, "total"),
+      sumEl,
+    );
+    const els = Array.from({ length: n }, () => h("div", { class: "w-die" }));
+    dice.append(...els);
+    const timers = [];
+    const roll = () => {
+      for (const t of timers) clearTimeout(t);
+      timers.length = 0;
+      const vals = els.map(rand);
+      const sum = vals.reduce((a, b) => a + b, 0);
+      dice.setAttribute("aria-label", `rolled ${vals.join(", ")}`);
+      const first = !dice.isConnected;
+      const calm = calmMotion() || first;
+      if (!first) total.classList.add("rolling");
+      els.forEach((d, i) => {
+        const end = calm ? 0 : 420 + Math.min(i, 5) * 60;
+        const turns = Math.random() < 0.5 ? -1 : 1;
+        d.style.setProperty("--spin", `${turns * 360}deg`);
+        d.style.setProperty("--hop", `${-12 - Math.random() * 12}px`);
+        d.style.setProperty("--tumble", `${end}ms`);
+        d.classList.remove("tumbling", "landed");
+        void d.offsetWidth;
+        if (!calm) d.classList.add("tumbling");
+        let settled = false;
+        const shuffle = () => {
+          if (settled) return;
+          face(d, rand());
+          timers.push(setTimeout(shuffle, 70));
+        };
+        if (!calm) shuffle();
+        timers.push(
+          setTimeout(() => {
+            settled = true;
+            d.classList.remove("tumbling");
+            face(d, vals[i]);
+            if (!calm) d.classList.add("landed");
+          }, end),
+        );
+      });
+      const last = calm ? 0 : 420 + Math.min(n - 1, 5) * 60;
+      timers.push(
+        setTimeout(() => {
+          total.classList.remove("rolling");
+          if (n <= 1) return;
+          if (first) sumEl.textContent = sum;
+          else swapIn(sumEl, sum);
+        }, last),
+      );
     };
     roll();
     return card(
-      `dice · ${n}d${sides}`,
-      capped ? "capped at 20 dice" : null,
+      "dice roll",
+      `${n}d${sides}${capped ? ", capped at 20 dice" : ""}`,
       dice,
-      total,
+      n > 1 && total,
       h(
         "div",
-        { class: "w-btn-row" },
-        h("button", { class: "w-btn primary", html: "roll", onclick: roll }),
+        { class: "w-btn-row w-center-row" },
+        h("button", {
+          type: "button",
+          class: "w-btn primary",
+          html: "roll",
+          onclick: roll,
+        }),
       ),
     );
   },
@@ -1337,25 +1729,56 @@ reg({
   },
   build: ({ lo, hi }) => {
     if (lo > hi) [lo, hi] = [hi, lo];
-    const loIn = h("input", {
-      class: "w-input w-num",
-      type: "number",
-      value: lo,
-    });
-    const hiIn = h("input", {
-      class: "w-input w-num",
-      type: "number",
-      value: hi,
-    });
-    const out = h("div", { class: "w-big w-rng-out" }, "—");
+    const field = (text, value) => {
+      const input = h("input", {
+        class: "w-input w-rng-input",
+        type: "number",
+        inputmode: "numeric",
+        value,
+      });
+      return [
+        input,
+        h(
+          "label",
+          { class: "w-rng-field" },
+          h("span", { class: "w-rng-label" }, text),
+          input,
+        ),
+      ];
+    };
+    const [loIn, loField] = field("min", lo);
+    const [hiIn, hiField] = field("max", hi);
+    const out = h("div", { class: "w-rng-out", role: "status" });
+    const note = h("div", { class: "w-rng-note" });
+    let spin;
+    let value = "";
     const pick = () => {
-      const a = Math.ceil(+loIn.value),
-        b = Math.floor(+hiIn.value);
-      out.textContent =
-        a > b ? "—" : a + Math.floor(Math.random() * (b - a + 1));
-      out.classList.remove("rolled");
-      void out.offsetWidth;
-      out.classList.add("rolled");
+      const a = Math.ceil(+loIn.value);
+      const b = Math.floor(+hiIn.value);
+      clearTimeout(spin);
+      const bad =
+        loIn.value === "" || hiIn.value === "" || Number.isNaN(a + b) || a > b;
+      loIn.setAttribute("aria-invalid", bad);
+      hiIn.setAttribute("aria-invalid", bad);
+      note.classList.toggle("err", bad);
+      if (bad) {
+        value = "";
+        note.textContent = "min has to be less than or equal to max";
+        return swapIn(out, "?");
+      }
+      note.textContent = `whole number from ${a.toLocaleString()} to ${b.toLocaleString()}`;
+      const roll = () => a + Math.floor(Math.random() * (b - a + 1));
+      value = String(roll());
+      const shown = (+value).toLocaleString();
+      if (calmMotion() || !out.isConnected) return swapIn(out, shown);
+      let k = 0;
+      const tick = () => {
+        if (k++ >= 6 || !out.isConnected) return swapIn(out, shown);
+        out.textContent = roll().toLocaleString();
+        out.classList.remove("w-swap");
+        spin = setTimeout(tick, 34 + k * 10);
+      };
+      tick();
     };
     const onEnter = (e) => {
       if (e.key === "Enter") pick();
@@ -1365,27 +1788,18 @@ reg({
     return card(
       "random number",
       null,
-      h(
-        "div",
-        { class: "w-row" },
-        loIn,
-        h("span", { class: "w-mid" }, "to"),
-        hiIn,
-      ),
-      h(
-        "div",
-        { class: "w-out-row w-center-row" },
-        out,
-        copyBtn(() => out.textContent),
-      ),
+      h("div", { class: "w-rng-hero" }, out, note),
+      h("div", { class: "w-rng-fields" }, loField, hiField),
       h(
         "div",
         { class: "w-btn-row" },
         h("button", {
+          type: "button",
           class: "w-btn primary",
           html: "generate",
           onclick: pick,
         }),
+        copyBtn(() => value, "copy number"),
       ),
     );
   },
@@ -1411,35 +1825,52 @@ reg({
       "very doubtful",
       "outlook not so good",
     ];
+    const answer = h("span", { class: "w-8ball-answer", role: "status" });
+    const win = h(
+      "span",
+      { class: "w-8ball-window" },
+      h("span", { class: "w-8ball-eight", "aria-hidden": "true" }, "8"),
+      h("span", { class: "w-8ball-die" }, answer),
+    );
     const ball = h(
-      "div",
-      { class: "w-8ball" },
-      h("div", { class: "w-8ball-window" }, "8"),
+      "button",
+      { type: "button", class: "w-8ball", "aria-label": "shake the 8 ball" },
+      win,
     );
     let shakeTo = null;
+    let last = -1;
     const ask = () => {
-      const win = ball.firstChild;
-      win.textContent = "…";
-      if (shakeTo) clearTimeout(shakeTo);
+      clearTimeout(shakeTo);
       ball.classList.remove("shaking");
       win.classList.remove("revealed");
       void ball.offsetWidth;
-      ball.classList.add("shaking");
-      shakeTo = setTimeout(() => {
-        ball.classList.remove("shaking");
-        win.textContent = ans[Math.floor(Math.random() * ans.length)];
-        win.classList.add("revealed");
-      }, 420);
+      ball.classList.add("shaking", "asked");
+      shakeTo = setTimeout(
+        () => {
+          ball.classList.remove("shaking");
+          let i = Math.floor(Math.random() * ans.length);
+          if (i === last) i = (i + 1) % ans.length;
+          last = i;
+          answer.textContent = ans[i];
+          win.classList.add("revealed");
+        },
+        calmMotion() ? 0 : 640,
+      );
     };
     ball.onclick = ask;
     return card(
       "magic 8 ball",
-      "ask a yes/no question",
-      h("div", { class: "w-center" }, ball),
+      "ask a yes or no question, then shake",
+      h("div", { class: "w-center w-8ball-stage" }, ball),
       h(
         "div",
-        { class: "w-btn-row" },
-        h("button", { class: "w-btn primary", html: "shake", onclick: ask }),
+        { class: "w-btn-row w-center-row" },
+        h("button", {
+          type: "button",
+          class: "w-btn primary",
+          html: "shake",
+          onclick: ask,
+        }),
       ),
     );
   },
@@ -1450,25 +1881,28 @@ reg({
   match: (q) =>
     /^(?:yes\s+or\s+no|should\s+i\b.*|will\s+i\b.*)$/i.test(q.trim()) &&
     /\?$|^yes\s+or\s+no$|^should\s+i|^will\s+i/i.test(q.trim()),
-  build: () => {
-    const out = h("div", { class: "w-big w-yesno" }, "?");
+  build: (_, q = "") => {
+    const question = q.trim();
+    const out = h("div", { class: "w-yesno", role: "status" });
     const go = () => {
       const r = Math.random() < 0.5;
-      out.textContent = r ? "yes" : "no";
-      out.style.color = r ? "var(--green)" : "var(--red)";
-      out.classList.remove("rolled");
-      void out.offsetWidth;
-      out.classList.add("rolled");
+      out.dataset.answer = r ? "yes" : "no";
+      swapIn(out, r ? "yes" : "no");
     };
     go();
     return card(
       "yes or no",
-      null,
-      h("div", { class: "w-center" }, out),
+      /^yes\s+or\s+no$/i.test(question) ? null : question,
+      out,
       h(
         "div",
-        { class: "w-btn-row" },
-        h("button", { class: "w-btn primary", html: "again", onclick: go }),
+        { class: "w-btn-row w-center-row" },
+        h("button", {
+          type: "button",
+          class: "w-btn primary",
+          html: "ask again",
+          onclick: go,
+        }),
       ),
     );
   },
@@ -1488,47 +1922,59 @@ reg({
     return items.length >= 2 ? { items } : null;
   },
   build: ({ items }) => {
-    const out = h("div", { class: "w-big w-picker-out" }, "—");
+    const out = h("div", { class: "w-picker-out", role: "status" });
     let spin = null;
     const go = () => {
       clearTimeout(spin);
-      const n = 8;
+      const first = !out.isConnected;
+      const n = calmMotion() || first ? 1 : 9;
       let i = Math.floor(Math.random() * items.length);
       const end = i + n;
+      out.classList.remove("flash", "spinning");
       const tick = () => {
         out.textContent = items[i % items.length];
         i++;
-        if (i < end) spin = setTimeout(tick, 30 + (i - end + n) * 14);
-        else {
-          out.classList.add("flash");
-          requestAnimationFrame(() => out.classList.remove("flash"));
+        out.classList.remove("w-tick");
+        void out.offsetWidth;
+        if (i < end) {
+          out.classList.add("w-tick", "spinning");
+          spin = setTimeout(tick, 40 + (i - end + n) ** 2 * 3);
+          return;
         }
+        out.classList.remove("spinning");
+        if (first) return;
+        out.classList.add("flash");
+        spin = setTimeout(() => out.classList.remove("flash"), 60);
       };
-      out.classList.remove("flash");
       tick();
     };
     go();
     return card(
       "decision picker",
-      items.join(" · "),
-      h("div", { class: "w-center" }, out),
+      `${items.length} options: ${items.join(", ")}`,
+      h("div", { class: "w-center w-picker-stage" }, out),
       h(
         "div",
-        { class: "w-btn-row" },
+        { class: "w-btn-row w-center-row" },
         h("button", {
+          type: "button",
           class: "w-btn primary",
           html: "pick again",
           onclick: go,
         }),
-        copyBtn(() => out.textContent, "copy result"),
       ),
     );
   },
 });
 
-////// text encoders / converters ////////////////////////////////////////////
-
-const converter = (id, title, sub, fn, matchRe) =>
+const converter = (
+  id,
+  title,
+  sub,
+  fn,
+  matchRe,
+  { mono = false, modes, mode = 0, err = "can't convert that", cls } = {},
+) =>
   reg({
     id,
     match: (q) => {
@@ -1538,70 +1984,103 @@ const converter = (id, title, sub, fn, matchRe) =>
       return { text: cap.trim() };
     },
     build: ({ text }) => {
-      const input = h(
-        "textarea",
-        { class: "w-textarea", rows: "2", placeholder: "input…" },
-        text,
+      let cur = mode;
+      const input = h("textarea", {
+        class: "w-textarea w-tx-in",
+        rows: "2",
+        "aria-label": `${title} input`,
+        spellcheck: "false",
+        autocapitalize: "off",
+        autocomplete: "off",
+      });
+      const out = h("div", {
+        class: `w-tx-text${mono ? " mono" : ""}${cls ? ` ${cls}` : ""}`,
+        "data-ph": "the result appears here",
+      });
+      const copy = copyBtn(() => out.textContent, "copy result");
+      const panel = h(
+        "div",
+        { class: "w-tx-out", role: "status", "aria-live": "polite" },
+        out,
+        copy,
       );
-      const out = h("div", { class: "w-out w-mono", "aria-live": "polite" });
       const run = () => {
+        const f = modes ? modes[cur][1] : fn;
+        input.placeholder = modes?.[cur][2] ?? "type or paste text";
+        let ok = true;
         try {
-          out.textContent = fn(input.value);
-          out.classList.remove("err");
+          out.textContent = f(input.value);
         } catch (e) {
-          out.textContent = e.message || "invalid input";
-          out.classList.add("err");
+          ok = false;
+          out.textContent = e?.name === "Error" ? e.message : err;
         }
+        panel.classList.toggle("err", !ok);
+        copy.disabled = !ok || !out.textContent;
       };
+      const seg =
+        modes &&
+        segmented(
+          "direction",
+          modes.map(([label], i) => [i, label]),
+          cur,
+          (i) => {
+            if (!panel.classList.contains("err") && out.textContent)
+              input.value = out.textContent;
+            cur = i;
+            run();
+          },
+        );
+      seg?.classList.add("fit");
       input.value = text;
       input.oninput = run;
       run();
-      return card(
-        title,
-        sub,
-        input,
-        h(
-          "div",
-          { class: "w-out-row" },
-          out,
-          copyBtn(() => out.textContent),
-        ),
-      );
+      return card(title, sub, seg, input, panel);
     },
   });
 
+const b64Modes = [
+  ["encode", (s) => btoa(unescape(encodeURIComponent(s)))],
+  [
+    "decode",
+    (s) => {
+      const t = s.trim().replace(/-/g, "+").replace(/_/g, "/");
+      if (!t) return "";
+      return decodeURIComponent(escape(atob(t)));
+    },
+    "paste base64",
+  ],
+];
+const urlModes = [
+  ["encode", (s) => encodeURIComponent(s)],
+  ["decode", (s) => decodeURIComponent(s), "paste url-encoded text"],
+];
 converter(
   "b64enc",
-  "base64 encode",
+  "base64",
   null,
-  (s) => btoa(unescape(encodeURIComponent(s))),
+  null,
   /^base64\s+encode\s+(.+)$|^encode\s+(?:to\s+)?base64\s+(.+)$|^base64\s*[:=]\s*(.+)$|^(.+)\s+to\s+base64$/i,
+  { mono: true, modes: b64Modes, err: "that isn't valid base64" },
 );
 converter(
   "b64dec",
-  "base64 decode",
-  "handles standard and url-safe base64",
-  (s) => {
-    const t = s.trim().replace(/-/g, "+").replace(/_/g, "/");
-    if (!t) return "";
-    return decodeURIComponent(escape(atob(t)));
-  },
+  "base64",
+  null,
+  null,
   /^base64\s+decode\s+(.+)$|^decode\s+base64\s+(.+)$/i,
+  { mono: true, modes: b64Modes, mode: 1, err: "that isn't valid base64" },
 );
-converter(
-  "urlenc",
-  "url encode",
-  null,
-  (s) => encodeURIComponent(s),
-  /^url\s*encode\s+(.+)$/i,
-);
-converter(
-  "urldec",
-  "url decode",
-  null,
-  (s) => decodeURIComponent(s),
-  /^url\s*decode\s+(.+)$/i,
-);
+converter("urlenc", "url encoding", null, null, /^url\s*encode\s+(.+)$/i, {
+  mono: true,
+  modes: urlModes,
+  err: "that isn't valid url encoding",
+});
+converter("urldec", "url encoding", null, null, /^url\s*decode\s+(.+)$/i, {
+  mono: true,
+  modes: urlModes,
+  mode: 1,
+  err: "that isn't valid url encoding",
+});
 converter(
   "rot13",
   "rot13",
@@ -1655,19 +2134,25 @@ const fromBinary = (s) => {
     Uint8Array.from(groups, (b) => parseInt(b, 2)),
   );
 };
+const binModes = [
+  ["encode", toBinary],
+  ["decode", fromBinary, "paste binary"],
+];
 converter(
   "textbin",
-  "text → binary",
+  "binary",
   null,
-  toBinary,
+  null,
   /^(?:text\s+to\s+binary|binary\s+encode|string\s+to\s+binary)\s+(.+)$|^(?!\d+\s+(?:to|in)\s+binary$)(.+)\s+(?:to|in)\s+binary$/i,
+  { mono: true, modes: binModes },
 );
 converter(
   "bintext",
-  "binary → text",
+  "binary",
   null,
-  fromBinary,
+  null,
   /^binary\s+(?:to\s+text|decode)\s+([01\s]+)$|^([01]{8}(?:\s+[01]{8})*)$/i,
+  { mono: true, modes: binModes, mode: 1 },
 );
 
 const MORSE = {
@@ -1721,7 +2206,7 @@ const RMORSE = Object.fromEntries(
 converter(
   "morse",
   "morse code",
-  "text ↔ morse",
+  "type text or morse",
   (s) => {
     if (/^[.\-/\s]+$/.test(s.trim()))
       return s
@@ -1744,6 +2229,7 @@ converter(
       .trim();
   },
   /^(.+?)\s+(?:in|to)\s+morse(?:\s+code)?$|^morse(?:\s+code)?\s*[:=]\s*(.+)$|^(?:decode|translate)\s+morse(?:\s+code)?\s+(.+)$/i,
+  { mono: true, cls: "morse" },
 );
 
 const NATO = {
@@ -1800,6 +2286,7 @@ converter(
       .replace(/[\s_-]+/g, "-")
       .replace(/^-+|-+$/g, ""),
   /^slugify\s+(.+)$|^slug\s*[:=]\s*(.+)$|^(.+)\s+to\s+(?:a\s+)?slug$/i,
+  { mono: true },
 );
 converter(
   "htmlenc",
@@ -1818,9 +2305,56 @@ converter(
         })[c],
     ),
   /^html\s+(?:entity\s+)?encode\s+(.+)$/i,
+  { mono: true },
 );
 
-////// color tools /////////////////////////////////////////////////////////////
+const numTick = (el, text) => {
+  const prev = el.textContent;
+  if (prev === text) return;
+  el.textContent = text;
+  if (!prev || !el.isConnected) return;
+  el.animate(
+    calmMotion()
+      ? [{ opacity: 0.55 }, { opacity: 1 }]
+      : [
+          { opacity: 0.4, filter: "blur(2px)", translate: "0 0.18em" },
+          { opacity: 1, filter: "blur(0)", translate: "0 0" },
+        ],
+    { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
+  );
+};
+
+const colorPanel = (swatch) => {
+  const vals = {};
+  const rows = ["hex", "rgb", "hsl"].map((l) => {
+    const v = h("span", { class: "w-mono w-color-val" });
+    vals[l] = v;
+    return h(
+      "div",
+      { class: "w-color-row" },
+      h("span", { class: "w-color-label" }, l),
+      v,
+      copyBtn(() => v.textContent, `copy ${l}`),
+    );
+  });
+  const set = ({ r, g, b }) => {
+    const hex = rgbToHex(r, g, b);
+    const hsl = rgbToHsl(r, g, b);
+    swatch.style.backgroundColor = hex;
+    numTick(vals.hex, hex.toUpperCase());
+    numTick(vals.rgb, `rgb(${r}, ${g}, ${b})`);
+    numTick(vals.hsl, `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`);
+  };
+  return {
+    el: h(
+      "div",
+      { class: "w-color-grid" },
+      swatch,
+      h("div", { class: "w-color-rows" }, ...rows),
+    ),
+    set,
+  };
+};
 
 reg({
   id: "colorinfo",
@@ -1836,31 +2370,52 @@ reg({
   },
   build: ({ rgb }) => {
     if (!rgb) return null;
-    const hex = rgbToHex(rgb.r, rgb.g, rgb.b);
-    const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-    const fmts = [
-      ["hex", hex.toUpperCase()],
-      ["rgb", `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`],
-      ["hsl", `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`],
-    ];
-    const sw = h("div", { class: "w-swatch", style: { background: hex } });
-    const rows = fmts.map(([l, v]) =>
-      h(
-        "div",
-        { class: "w-color-row" },
-        h("span", { class: "w-color-label" }, l),
-        h("span", { class: "w-mono" }, v),
-        copyBtn(() => v, `copy ${l}`),
-      ),
+    const hslToRgb = (hh, s, l) => {
+      const a = (s / 100) * Math.min(l / 100, 1 - l / 100);
+      const f = (n) => {
+        const k = (n + hh / 30) % 12;
+        return Math.round(
+          255 * (l / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))),
+        );
+      };
+      return { r: f(0), g: f(8), b: f(4) };
+    };
+    const swatch = h("div", { class: "w-swatch" });
+    const panel = colorPanel(swatch);
+    const base = rgbToHsl(rgb.r, rgb.g, rgb.b);
+    const steps = [92, 82, 70, 58, 46, 36, 26, 16];
+    const nearest = steps.reduce((best, l) =>
+      Math.abs(l - base.l) < Math.abs(best - base.l) ? l : best,
     );
+    const shades = steps.map((l) =>
+      l === nearest ? rgb : hslToRgb(base.h, base.s, l),
+    );
+    const buttons = shades.map((c) => {
+      const hex = rgbToHex(c.r, c.g, c.b);
+      const b = h("button", {
+        class: `w-shade${luminance(c) > 0.4 ? " light" : ""}`,
+        type: "button",
+        title: hex.toUpperCase(),
+        "aria-label": `show ${hex.toUpperCase()}`,
+        style: { backgroundColor: hex },
+      });
+      b.onclick = () => pick(b, c);
+      return b;
+    });
+    const pick = (btn, c) => {
+      for (const b of buttons)
+        b.setAttribute("aria-pressed", String(b === btn));
+      panel.set(c);
+    };
+    pick(buttons[shades.indexOf(rgb)], rgb);
     return card(
       "color",
       null,
+      panel.el,
       h(
         "div",
-        { class: "w-color-grid" },
-        sw,
-        h("div", { class: "w-color-rows" }, ...rows),
+        { class: "w-shades", role: "group", "aria-label": "shades" },
+        ...buttons,
       ),
     );
   },
@@ -1870,37 +2425,58 @@ reg({
   id: "randomcolor",
   match: (q) => /^random\s+(?:color|colour|hex)$/i.test(q.trim()),
   build: () => {
-    const sw = h("div", { class: "w-swatch lg" });
-    const txt = h("span", { class: "w-mono w-big" });
-    const go = () => {
-      const hex = rgbToHex(
-        Math.random() * 255,
-        Math.random() * 255,
-        Math.random() * 255,
-      );
-      sw.style.backgroundColor = hex;
-      txt.textContent = hex.toUpperCase();
+    const swatch = h("button", {
+      class: "w-swatch w-swatch-btn",
+      type: "button",
+      "aria-label": "generate another color",
+    });
+    const panel = colorPanel(swatch);
+    const recent = h("div", {
+      class: "w-recent-colors",
+      role: "group",
+      "aria-label": "recent colors",
+    });
+    const show = (c) => {
+      panel.set(c);
+      const hex = rgbToHex(c.r, c.g, c.b);
+      const dot = h("button", {
+        class: "w-recent-dot",
+        type: "button",
+        title: hex.toUpperCase(),
+        "aria-label": `show ${hex.toUpperCase()} again`,
+        style: { backgroundColor: hex },
+      });
+      const mark = () => {
+        for (const d of recent.children)
+          d.setAttribute("aria-pressed", String(d === dot));
+      };
+      dot.onclick = () => {
+        panel.set(c);
+        mark();
+      };
+      recent.prepend(dot);
+      mark();
+      while (recent.children.length > 8) recent.lastElementChild.remove();
     };
+    const go = () =>
+      show({
+        r: Math.round(Math.random() * 255),
+        g: Math.round(Math.random() * 255),
+        b: Math.round(Math.random() * 255),
+      });
+    swatch.onclick = go;
     go();
     return card(
       "random color",
       null,
+      panel.el,
       h(
         "div",
-        { class: "w-color-grid" },
-        sw,
-        h(
-          "div",
-          { class: "w-row" },
-          txt,
-          copyBtn(() => txt.textContent),
-        ),
-      ),
-      h(
-        "div",
-        { class: "w-btn-row" },
+        { class: "w-random-color-foot" },
+        recent,
         h("button", {
           class: "w-btn primary",
+          type: "button",
           html: "generate color",
           onclick: go,
         }),
@@ -1916,61 +2492,172 @@ reg({
       q.trim(),
     ),
   build: () => {
-    const fg = h("input", {
-      type: "color",
-      class: "w-color-pick",
-      value: "#cdd6f4",
-    });
-    const bg = h("input", {
-      type: "color",
-      class: "w-color-pick",
-      value: "#1e1e2e",
-    });
-    const ratioEl = h("div", {
-      class: "w-big w-contrast-ratio",
-      "aria-live": "polite",
-    });
+    const X = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6l-12 12"/><path d="M6 6l12 12"/></svg>`;
+    const SWAP = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16"/><path d="M4 7l3 -3l3 3"/><path d="M17 20v-16"/><path d="M14 17l3 3l3 -3"/></svg>`;
+    const picker = (value, label) => {
+      const input = h("input", {
+        type: "color",
+        class: "w-color-pick",
+        value,
+        "aria-label": `pick ${label} color`,
+      });
+      const hex = h("input", {
+        class: "w-mono w-contrast-hex",
+        value: value.toUpperCase(),
+        spellcheck: "false",
+        autocomplete: "off",
+        maxlength: "7",
+        "aria-label": `${label} hex`,
+      });
+      return {
+        input,
+        hex,
+        el: h(
+          "div",
+          { class: "w-contrast-pick" },
+          input,
+          h(
+            "span",
+            { class: "w-contrast-pick-text" },
+            h("span", { class: "w-contrast-pick-label" }, label),
+            hex,
+          ),
+        ),
+      };
+    };
+    const fg = picker("#cdd6f4", "text");
+    const bg = picker("#1e1e2e", "background");
+    const ratioNum = h("span", { class: "w-contrast-num" });
+    const verdict = h("div", { class: "w-focal-cap" });
+    const cell = (min) => {
+      const word = h("span", { class: "w-grade-word" });
+      return {
+        min,
+        word,
+        el: h(
+          "span",
+          { class: "w-grade" },
+          h(
+            "span",
+            { class: "w-grade-icon", "aria-hidden": "true" },
+            h("span", { class: "w-grade-yes", html: CHECK }),
+            h("span", { class: "w-grade-no", html: X }),
+          ),
+          word,
+        ),
+      };
+    };
+    const rows = [
+      ["normal text", 4.5, 7],
+      ["large text", 3, 4.5],
+    ].map(([size, aa, aaa]) => ({ size, cells: [cell(aa), cell(aaa)] }));
+    const table = h(
+      "div",
+      { class: "w-grades", role: "table", "aria-label": "WCAG results" },
+      h(
+        "div",
+        { class: "w-grades-row", role: "row" },
+        h("span", { role: "columnheader" }),
+        h("span", { class: "w-grades-head", role: "columnheader" }, "AA"),
+        h("span", { class: "w-grades-head", role: "columnheader" }, "AAA"),
+      ),
+      ...rows.map((r) =>
+        h(
+          "div",
+          { class: "w-grades-row", role: "row" },
+          h("span", { class: "w-grades-size", role: "rowheader" }, r.size),
+          ...r.cells.map((c) => {
+            c.el.setAttribute("role", "cell");
+            return c.el;
+          }),
+        ),
+      ),
+    );
     const preview = h(
       "div",
       { class: "w-contrast-preview" },
-      "Aa quick sample",
+      h("span", { class: "w-contrast-large" }, "Large text"),
+      h(
+        "span",
+        { class: "w-contrast-body" },
+        "Body text at a normal reading size.",
+      ),
     );
-    const grades = h("div", { class: "w-chips" });
     const run = () => {
-      const l1 = luminance(hexToRgb(fg.value)),
-        l2 = luminance(hexToRgb(bg.value));
+      const l1 = luminance(hexToRgb(fg.input.value));
+      const l2 = luminance(hexToRgb(bg.input.value));
       const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-      ratioEl.textContent = `${ratio.toFixed(2)} : 1`;
-      preview.style.color = fg.value;
-      preview.style.background = bg.value;
-      grades.replaceChildren(
-        ...[
-          ["AA normal", 4.5],
-          ["AAA normal", 7],
-          ["AA large", 3],
-        ].map(([label, min]) =>
-          h(
-            "span",
-            { class: `w-grade ${ratio >= min ? "pass" : "fail"}` },
-            label + (ratio >= min ? " ✓" : " ✗"),
-          ),
-        ),
-      );
+      const shown = Math.floor(ratio * 100) / 100;
+      numTick(ratioNum, shown.toFixed(2));
+      verdict.textContent =
+        ratio >= 7
+          ? "passes every level"
+          : ratio >= 4.5
+            ? "fine for body text"
+            : ratio >= 3
+              ? "large text only"
+              : "too low for any text";
+      for (const p of [fg, bg])
+        if (document.activeElement !== p.hex)
+          p.hex.value = p.input.value.toUpperCase();
+      preview.style.color = fg.input.value;
+      preview.style.backgroundColor = bg.input.value;
+      for (const c of rows.flatMap((r) => r.cells)) {
+        const ok = ratio >= c.min;
+        c.el.classList.toggle("pass", ok);
+        c.word.textContent = ok ? "pass" : "fail";
+      }
     };
-    fg.oninput = bg.oninput = run;
+    for (const p of [fg, bg]) {
+      p.input.oninput = run;
+      p.hex.oninput = () => {
+        const v = p.hex.value.trim().replace(/^#?/, "#");
+        const rgb = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) && hexToRgb(v);
+        p.hex.setAttribute("aria-invalid", String(!rgb));
+        if (!rgb) return;
+        p.input.value = rgbToHex(rgb.r, rgb.g, rgb.b);
+        run();
+      };
+      p.hex.addEventListener("blur", () => {
+        p.hex.removeAttribute("aria-invalid");
+        p.hex.value = p.input.value.toUpperCase();
+      });
+    }
+    const swap = h("button", {
+      class: "w-contrast-swap",
+      type: "button",
+      "aria-label": "swap text and background",
+      title: "swap colors",
+      html: SWAP,
+    });
+    swap.onclick = () => {
+      [fg.input.value, bg.input.value] = [bg.input.value, fg.input.value];
+      swap.classList.toggle("flipped");
+      run();
+    };
     run();
     return card(
       "contrast checker",
-      "WCAG ratio",
-      ratioEl,
-      grades,
-      preview,
+      null,
       h(
         "div",
-        { class: "w-row" },
-        h("label", { class: "w-label" }, "text", fg),
-        h("label", { class: "w-label" }, "background", bg),
+        { class: "w-contrast-top" },
+        h(
+          "div",
+          { class: "w-focal", role: "status", "aria-live": "polite" },
+          h(
+            "div",
+            { class: "w-big w-contrast-ratio" },
+            ratioNum,
+            h("span", { class: "w-nres-op" }, ":"),
+            "1",
+          ),
+          verdict,
+        ),
+        table,
       ),
+      preview,
+      h("div", { class: "w-contrast-picks" }, fg.el, swap, bg.el),
     );
   },
 });
@@ -1980,56 +2667,205 @@ reg({
   match: (q) =>
     /^(?:css\s+)?gradient(?:\s+generator|\s+maker)?$/i.test(q.trim()),
   build: () => {
-    const c1 = h("input", {
-      type: "color",
-      class: "w-color-pick",
-      value: "#89b4fa",
-    });
-    const c2 = h("input", {
-      type: "color",
-      class: "w-color-pick",
-      value: "#cba6f7",
-    });
-    const angle = h("input", {
-      class: "w-range",
-      type: "range",
-      min: "0",
-      max: "360",
-      value: "135",
-    });
-    const angleVal = h("span", { class: "w-range-val" }, "135°");
+    let angle = 135;
+    let mode = "linear";
+    const stops = [
+      { color: "#89b4fa", pos: 0 },
+      { color: "#cba6f7", pos: 100 },
+    ];
     const preview = h("div", { class: "w-gradient-preview" });
-    const code = h("div", { class: "w-out w-mono" });
+    const track = h("div", { class: "w-grad-track" });
+    const code = h("div", { class: "w-mono w-grad-code" });
+    const angleVal = h("span", { class: "w-grad-angle-val" });
+    const needle = h("span", { class: "w-grad-needle" });
+    const dial = h(
+      "div",
+      {
+        class: "w-grad-dial",
+        role: "slider",
+        tabindex: "0",
+        "aria-label": "angle",
+        "aria-valuemin": "0",
+        "aria-valuemax": "359",
+      },
+      needle,
+    );
+    const stopList = () =>
+      [...stops]
+        .sort((a, b) => a.pos - b.pos)
+        .map((s) => `${s.color} ${Math.round(s.pos)}%`)
+        .join(", ");
     const run = () => {
-      const css = `linear-gradient(${angle.value}deg, ${c1.value}, ${c2.value})`;
+      const css =
+        mode === "linear"
+          ? `linear-gradient(${angle}deg, ${stopList()})`
+          : `radial-gradient(circle, ${stopList()})`;
       preview.style.background = css;
+      track.style.background = `linear-gradient(90deg, ${stopList()})`;
       code.textContent = `background: ${css};`;
-      angleVal.textContent = `${angle.value}°`;
+      angleVal.textContent = `${angle}°`;
+      needle.style.rotate = `${angle}deg`;
+      dial.setAttribute("aria-valuenow", String(angle));
+      dial.setAttribute("aria-valuetext", `${angle} degrees`);
+      for (const s of stops) {
+        s.handle.style.left = `${s.pos}%`;
+        s.handle.style.setProperty("--stop", s.color);
+        s.handle.setAttribute("aria-valuenow", String(Math.round(s.pos)));
+      }
     };
-    c1.oninput = c2.oninput = angle.oninput = run;
+    for (const [i, s] of stops.entries()) {
+      const input = h("input", {
+        type: "color",
+        class: "w-grad-color",
+        value: s.color,
+        tabindex: "-1",
+        "aria-hidden": "true",
+      });
+      const openPicker = () => {
+        try {
+          input.showPicker();
+        } catch {
+          input.click();
+        }
+      };
+      input.oninput = () => {
+        s.color = input.value;
+        run();
+      };
+      const handle = h(
+        "div",
+        {
+          class: "w-grad-handle",
+          role: "slider",
+          tabindex: "0",
+          "aria-label": `${i ? "end" : "start"} color stop, press enter to change color`,
+          "aria-valuemin": "0",
+          "aria-valuemax": "100",
+        },
+        input,
+      );
+      s.handle = handle;
+      let drag = null;
+      handle.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        handle.setPointerCapture(e.pointerId);
+        drag = { x: e.clientX, moved: false };
+        handle.classList.add("grabbing");
+      });
+      handle.addEventListener("pointermove", (e) => {
+        if (!drag) return;
+        if (!drag.moved && Math.abs(e.clientX - drag.x) < 3) return;
+        drag.moved = true;
+        const r = track.getBoundingClientRect();
+        s.pos = Math.max(
+          0,
+          Math.min(100, ((e.clientX - r.left) / r.width) * 100),
+        );
+        run();
+      });
+      const end = () => {
+        if (!drag) return;
+        const { moved } = drag;
+        drag = null;
+        handle.classList.remove("grabbing");
+        if (!moved) openPicker();
+      };
+      handle.addEventListener("pointerup", end);
+      handle.addEventListener("pointercancel", () => {
+        drag = null;
+        handle.classList.remove("grabbing");
+      });
+      handle.addEventListener("keydown", (e) => {
+        const step = e.shiftKey ? 10 : 1;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openPicker();
+          return;
+        }
+        const d =
+          e.key === "ArrowRight" || e.key === "ArrowUp"
+            ? step
+            : e.key === "ArrowLeft" || e.key === "ArrowDown"
+              ? -step
+              : 0;
+        if (!d) return;
+        e.preventDefault();
+        s.pos = Math.max(0, Math.min(100, Math.round(s.pos + d)));
+        run();
+      });
+      track.append(handle);
+    }
+    let turning = false;
+    const setFromPointer = (e, snap) => {
+      const r = dial.getBoundingClientRect();
+      const deg =
+        (Math.atan2(
+          e.clientX - (r.left + r.width / 2),
+          -(e.clientY - (r.top + r.height / 2)),
+        ) *
+          180) /
+        Math.PI;
+      const a = Math.round((deg + 360) % 360);
+      angle = snap ? (Math.round(a / 15) * 15) % 360 : a;
+      run();
+    };
+    dial.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || mode !== "linear") return;
+      dial.setPointerCapture(e.pointerId);
+      turning = true;
+      dial.classList.add("grabbing");
+      setFromPointer(e, e.shiftKey);
+    });
+    dial.addEventListener("pointermove", (e) => {
+      if (turning) setFromPointer(e, e.shiftKey);
+    });
+    for (const ev of ["pointerup", "pointercancel"])
+      dial.addEventListener(ev, () => {
+        turning = false;
+        dial.classList.remove("grabbing");
+      });
+    dial.addEventListener("keydown", (e) => {
+      if (mode !== "linear") return;
+      const step = e.shiftKey ? 15 : 1;
+      const d =
+        e.key === "ArrowRight" || e.key === "ArrowUp"
+          ? step
+          : e.key === "ArrowLeft" || e.key === "ArrowDown"
+            ? -step
+            : 0;
+      if (!d) return;
+      e.preventDefault();
+      angle = (angle + d + 360) % 360;
+      run();
+    });
+    const modes = segmented("type", ["linear", "radial"], mode, (m) => {
+      mode = m;
+      dial.setAttribute("aria-disabled", String(m !== "linear"));
+      dialWrap.classList.toggle("off", m !== "linear");
+      run();
+    });
+    modes.classList.add("fit");
+    const dialWrap = h("div", { class: "w-grad-angle" }, dial, angleVal);
     run();
     return card(
       "css gradient",
-      null,
-      preview,
+      "drag the stops, click one to change its color",
       h(
         "div",
-        { class: "w-row" },
-        h("label", { class: "w-label" }, "from", c1),
-        h("label", { class: "w-label" }, "to", c2),
-        h("label", { class: "w-label" }, "angle: ", angleVal, angle),
+        { class: "w-grad-canvas" },
+        preview,
+        h("div", { class: "w-grad-track-wrap" }, track),
       ),
+      h("div", { class: "w-grad-controls" }, modes, dialWrap),
       h(
         "div",
-        { class: "w-out-row" },
+        { class: "w-grad-code-row" },
         code,
-        copyBtn(() => code.textContent),
+        copyBtn(() => code.textContent, "copy css"),
       ),
     );
   },
 });
-
-////// math / calculators //////////////////////////////////////////////////////
 
 const CALC_CONSTS = {
   pi: Math.PI,
@@ -2246,7 +3082,9 @@ const calcEvalRPN = (rpn, deg) => {
 };
 
 const calcEvaluate = (expr, deg) => {
-  const rpn = calcToRPN(calcTokenize(expr));
+  const open =
+    (expr.match(/\(/g)?.length ?? 0) - (expr.match(/\)/g)?.length ?? 0);
+  const rpn = calcToRPN(calcTokenize(expr + ")".repeat(Math.max(0, open))));
   if (!rpn.length) throw new Error("empty");
   const r = calcEvalRPN(rpn, deg);
   if (typeof r !== "number" || Number.isNaN(r)) throw new Error("not a number");
@@ -2270,8 +3108,20 @@ reg({
       if (Array.isArray(stored)) history = stored.slice(-50);
     } catch {}
     let mem = 0;
-    let deg = localStorage.getItem("ms-calc-deg") !== "rad";
+    let deg = true;
+    try {
+      deg = localStorage.getItem("ms-calc-deg") !== "rad";
+    } catch {}
     let histNav = -1;
+    let fresh = false;
+    const startsOperand = /^[\d.(a-zπ]/i;
+
+    const replay = (el, cls) => {
+      el.classList.remove(cls);
+      void el.offsetWidth;
+      el.classList.add(cls);
+    };
+    const pretty = (s) => s.replace(/\*/g, "×").replace(/\//g, "÷");
 
     const expr = h("input", {
       class: "w-calc2-expr",
@@ -2279,43 +3129,67 @@ reg({
       spellcheck: "false",
       autocomplete: "off",
       autocapitalize: "off",
+      inputmode: "decimal",
       "aria-label": "calculator expression",
     });
+    const eqLine = h("div", { class: "w-calc2-eq", "aria-hidden": "true" });
     const preview = h("div", {
       class: "w-calc2-preview",
       role: "status",
       "aria-live": "polite",
     });
+    const display = h("div", { class: "w-calc2-display" });
     const copy = copyBtn(
       () => preview.textContent.replace(/^=\s*/, "") || expr.value,
       "copy result",
     );
+    const memTag = h("span", {
+      class: "w-calc2-memtag",
+      "aria-live": "polite",
+    });
 
     const degBtn = h(
       "button",
       {
         class: "w-calc2-deg",
         type: "button",
+        role: "switch",
+        "aria-label": "use radians",
         title: "Switch between degrees and radians",
       },
-      "deg",
+      h("span", { class: "w-calc2-deg-opt" }, "deg"),
+      h("span", { class: "w-calc2-deg-opt" }, "rad"),
     );
+    const syncDeg = () => {
+      degBtn.dataset.unit = deg ? "deg" : "rad";
+      degBtn.setAttribute("aria-checked", String(!deg));
+    };
+    syncDeg();
+
+    const fitExpr = () => {
+      const n = expr.value.length;
+      expr.dataset.size = n > 22 ? "s" : n > 14 ? "m" : "l";
+    };
 
     const updatePreview = () => {
       const s = expr.value.trim();
-      preview.classList.remove("err");
+      display.classList.remove("err");
+      fitExpr();
       if (!s) {
         preview.textContent = "";
         return;
       }
       try {
-        preview.textContent = `= ${calcFmt(calcEvaluate(s, deg))}`;
+        const r = calcFmt(calcEvaluate(s, deg));
+        preview.textContent = r === s ? "" : `= ${r}`;
       } catch {
         preview.textContent = "";
       }
     };
 
     const insert = (text) => {
+      if (fresh && startsOperand.test(text)) expr.value = "";
+      fresh = false;
       const start = expr.selectionStart ?? expr.value.length;
       const end = expr.selectionEnd ?? expr.value.length;
       expr.value = expr.value.slice(0, start) + text + expr.value.slice(end);
@@ -2340,43 +3214,39 @@ reg({
     const clearAll = () => {
       expr.value = "";
       preview.textContent = "";
-      preview.classList.remove("err");
+      eqLine.textContent = "";
+      display.classList.remove("err");
       histNav = -1;
+      fitExpr();
       expr.focus();
     };
 
     const toggleSign = () => {
       const m = expr.value.match(/(-?\d*\.?\d+)(?!.*\d)/);
-      if (m) {
-        const flipped = m[0].startsWith("-") ? m[0].slice(1) : `-${m[0]}`;
-        expr.value =
-          expr.value.slice(0, m.index) +
-          flipped +
-          expr.value.slice(m.index + m[0].length);
-        updatePreview();
-        expr.focus();
-      } else insert("-");
+      if (!m) return insert("-");
+      const flipped = m[0].startsWith("-") ? m[0].slice(1) : `-${m[0]}`;
+      expr.value =
+        expr.value.slice(0, m.index) +
+        flipped +
+        expr.value.slice(m.index + m[0].length);
+      updatePreview();
+      expr.focus();
     };
 
     const histList = h("div", { class: "w-calc2-hist-list" });
     const renderHistory = () => {
       histList.replaceChildren();
-      if (!history.length) {
-        histList.append(
-          h(
-            "div",
-            { class: "w-calc2-hist-empty" },
-            "Results you keep show up here. Press = to save one.",
-          ),
-        );
-        return;
-      }
+      histWrap.hidden = !history.length;
       for (let i = history.length - 1; i >= 0; i--) {
         const it = history[i];
         const row = h(
           "button",
-          { class: "w-calc2-hist-row", type: "button" },
-          h("span", { class: "w-calc2-hist-expr" }, it.expr),
+          {
+            class: "w-calc2-hist-row",
+            type: "button",
+            title: "insert this result",
+          },
+          h("span", { class: "w-calc2-hist-expr" }, pretty(it.expr)),
           h("span", { class: "w-calc2-hist-res" }, `= ${it.result}`),
         );
         row.onclick = () => insert(it.result);
@@ -2396,8 +3266,9 @@ reg({
       try {
         r = calcEvaluate(s, deg);
       } catch {
-        preview.textContent = "error";
-        preview.classList.add("err");
+        preview.textContent = "not a valid expression";
+        display.classList.add("err");
+        replay(display, "shake");
         return;
       }
       const res = calcFmt(r);
@@ -2408,22 +3279,33 @@ reg({
         saveHistory();
         renderHistory();
       }
+      eqLine.textContent = `${pretty(s)} =`;
       expr.value = res;
+      fitExpr();
       expr.focus();
       expr.setSelectionRange(res.length, res.length);
       preview.textContent = "";
-      preview.classList.remove("err");
+      display.classList.remove("err");
       histNav = -1;
+      fresh = true;
+      replay(display, "committed");
     };
 
     degBtn.onclick = () => {
       deg = !deg;
-      degBtn.textContent = deg ? "deg" : "rad";
+      syncDeg();
+      try {
+        localStorage.setItem("ms-calc-deg", deg ? "deg" : "rad");
+      } catch {}
       updatePreview();
       expr.focus();
     };
 
     const sci = [
+      ["(", "("],
+      [")", ")"],
+      ["x²", "^2"],
+      ["xʸ", "^"],
       ["sin", "sin("],
       ["cos", "cos("],
       ["tan", "tan("],
@@ -2435,39 +3317,53 @@ reg({
       ["ln", "ln("],
       ["log", "log("],
       ["√", "sqrt("],
-      ["xʸ", "^"],
-      ["x²", "^2"],
       ["n!", "!"],
-      ["mod", " mod "],
-      ["%", "%"],
     ];
     const num = [
       ["C", "clear"],
-      ["(", "("],
-      [")", ")"],
       ["⌫", "back"],
+      ["%", "%"],
+      ["÷", "/"],
       ["7", "7"],
       ["8", "8"],
       ["9", "9"],
-      ["÷", "/"],
+      ["×", "*"],
       ["4", "4"],
       ["5", "5"],
       ["6", "6"],
-      ["×", "*"],
+      ["−", "-"],
       ["1", "1"],
       ["2", "2"],
       ["3", "3"],
-      ["−", "-"],
+      ["+", "+"],
       ["±", "sign"],
       ["0", "0"],
       [".", "."],
-      ["+", "+"],
     ];
+    const keyLabels = {
+      clear: "clear",
+      back: "delete",
+      sign: "change sign",
+      "/": "divide",
+      "*": "multiply",
+      "-": "minus",
+      "+": "plus",
+      "%": "percent",
+      "^2": "square",
+      "^": "power",
+      "!": "factorial",
+      "sqrt(": "square root",
+    };
 
+    const keyFor = new Map();
     const makeKey = ([label, action], cls) => {
       const b = h(
         "button",
-        { class: `w-calc2-key${cls}`, type: "button" },
+        {
+          class: `w-calc2-key${cls}`,
+          type: "button",
+          "aria-label": keyLabels[action],
+        },
         label,
       );
       b.onclick = () => {
@@ -2476,61 +3372,86 @@ reg({
         else if (action === "sign") toggleSign();
         else insert(action);
       };
+      keyFor.set(action, b);
       return b;
     };
 
-    const sciGrid = h(
-      "div",
-      { class: "w-calc2-sci" },
-      ...sci.map((k) => makeKey(k, " fn")),
-    );
     const numKeys = num.map((k) => {
-      const cls =
-        k[1] === "clear" || k[1] === "back"
-          ? " ctrl"
-          : /^[/*+-]$|^sign$/.test(k[1])
-            ? " op"
-            : "";
+      const cls = /^(?:clear|back|%)$/.test(k[1])
+        ? " ctrl"
+        : /^[/*+-]$/.test(k[1])
+          ? " op"
+          : "";
       return makeKey(k, cls);
     });
     const equals = h(
       "button",
-      { class: "w-calc2-key eq", type: "button" },
+      { class: "w-calc2-key eq", type: "button", "aria-label": "equals" },
       "=",
     );
     equals.onclick = commit;
+    keyFor.set("=", equals);
     const numGrid = h("div", { class: "w-calc2-num" }, ...numKeys, equals);
 
-    const memBar = h(
+    const flash = (key) => {
+      const action =
+        key === "Enter" || key === "="
+          ? "="
+          : key === "Backspace"
+            ? "back"
+            : key === "Escape"
+              ? "clear"
+              : key;
+      const b = keyFor.get(action);
+      if (!b) return;
+      b.classList.add("is-pressed");
+      clearTimeout(b._pressT);
+      b._pressT = setTimeout(() => b.classList.remove("is-pressed"), 120);
+    };
+
+    const syncMem = () => {
+      memTag.textContent = mem ? `m ${calcFmt(mem)}` : "";
+      memTag.classList.toggle("on", mem !== 0);
+    };
+    const memKeys = [
+      ["mc", "clear memory", () => (mem = 0)],
+      ["mr", "recall memory", () => insert(calcFmt(mem))],
+      [
+        "m+",
+        "add to memory",
+        () => {
+          try {
+            mem += calcEvaluate(expr.value.trim() || "0", deg);
+          } catch {}
+        },
+      ],
+      [
+        "m−",
+        "subtract from memory",
+        () => {
+          try {
+            mem -= calcEvaluate(expr.value.trim() || "0", deg);
+          } catch {}
+        },
+      ],
+    ].map(([l, label, fn]) => {
+      const b = h(
+        "button",
+        { class: "w-calc2-key mem", type: "button", "aria-label": label },
+        l,
+      );
+      b.onclick = () => {
+        fn();
+        syncMem();
+        if (l !== "mr") expr.focus();
+      };
+      return b;
+    });
+    const sciGrid = h(
       "div",
-      { class: "w-calc2-mem" },
-      ...[
-        ["mc", () => (mem = 0)],
-        ["mr", () => insert(calcFmt(mem))],
-        [
-          "m+",
-          () => {
-            try {
-              mem += calcEvaluate(expr.value.trim() || "0", deg);
-            } catch {}
-          },
-        ],
-        [
-          "m−",
-          () => {
-            try {
-              mem -= calcEvaluate(expr.value.trim() || "0", deg);
-            } catch {}
-          },
-        ],
-      ].map(([l, fn]) => {
-        const b = h("button", { class: "w-calc2-mem-key", type: "button" }, l);
-        b.onclick = () => {
-          fn();
-          if (l !== "mr") expr.focus();
-        };
-        return b;
-      }),
+      { class: "w-calc2-sci" },
+      ...memKeys,
+      ...sci.map((k) => makeKey(k, " fn")),
     );
 
     const histClear = h(
@@ -2550,10 +3471,17 @@ reg({
     };
 
     expr.addEventListener("input", () => {
+      fresh = false;
       histNav = -1;
       updatePreview();
     });
     expr.addEventListener("keydown", (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      flash(e.key);
+      if (fresh && e.key.length === 1 && startsOperand.test(e.key)) {
+        expr.value = "";
+        fresh = false;
+      }
       if (e.key === "Enter" || e.key === "=") {
         e.preventDefault();
         commit();
@@ -2581,39 +3509,38 @@ reg({
       }
     });
 
+    const histWrap = h(
+      "div",
+      { class: "w-calc2-hist" },
+      h(
+        "div",
+        { class: "w-calc2-hist-head" },
+        h("span", null, "history"),
+        histClear,
+      ),
+      histList,
+    );
+
+    display.append(
+      h("div", { class: "w-calc2-top" }, degBtn, memTag, copy),
+      eqLine,
+      expr,
+      preview,
+    );
+    fitExpr();
+
     const root = card(
       "calculator",
-      "scientific · ↑↓ recalls history · esc clears",
+      "scientific",
       h(
         "div",
         { class: "w-calc2" },
-        h(
-          "div",
-          { class: "w-calc2-display" },
-          h("div", { class: "w-calc2-top" }, degBtn, copy),
-          expr,
-          preview,
-        ),
+        display,
         h(
           "div",
           { class: "w-calc2-body" },
-          h(
-            "div",
-            { class: "w-calc2-pad" },
-            memBar,
-            h("div", { class: "w-calc2-grids" }, sciGrid, numGrid),
-          ),
-          h(
-            "div",
-            { class: "w-calc2-hist" },
-            h(
-              "div",
-              { class: "w-calc2-hist-head" },
-              h("span", null, "history"),
-              histClear,
-            ),
-            histList,
-          ),
+          h("div", { class: "w-calc2-grids" }, sciGrid, numGrid),
+          histWrap,
         ),
       ),
     );
@@ -2626,11 +3553,14 @@ reg({
       const ae = document.activeElement;
       if (ae === expr) return;
       if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key.length === 1 && /[0-9.+\-*/^%()!]/.test(e.key)) {
         e.preventDefault();
+        flash(e.key);
         insert(e.key);
       } else if (e.key === "Enter" || e.key === "=") {
         e.preventDefault();
+        flash(e.key);
         expr.focus();
         commit();
       }
@@ -2648,143 +3578,288 @@ reg({
   },
 });
 
-const calc = (id, title, sub, fields, compute) =>
+const splitBar = (aLabel, bLabel) => {
+  const aVal = h("span", { class: "w-split-val" });
+  const bVal = h("span", { class: "w-split-val" });
+  const bFill = h("div", { class: "w-split-b" });
+  const el = h(
+    "div",
+    { class: "w-split" },
+    h("div", { class: "w-split-bar", "aria-hidden": "true" }, bFill),
+    h(
+      "div",
+      { class: "w-split-legend" },
+      h("span", { class: "w-split-key a" }, aLabel, aVal),
+      h("span", { class: "w-split-key b" }, bLabel, bVal),
+    ),
+  );
+  const update = (a, b) => {
+    const ok = a > 0 && b >= 0 && Number.isFinite(a + b);
+    el.hidden = !ok;
+    if (!ok) return;
+    const share = b / (a + b);
+    bFill.style.scale = `${share} 1`;
+    numTick(aVal, `${Math.round((1 - share) * 100)}%`);
+    numTick(bVal, `${Math.round(share * 100)}%`);
+  };
+  return { el, update };
+};
+
+const money = (n) =>
+  `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const calc = ({ id, title, sub, alt, fields, compute, visual, empty }) =>
   reg({
     id,
     match: (q) =>
       new RegExp(
         `^${id.replace(/_/g, "[\\s_-]*")}(?:\\s+calculator|\\s+calc)?$`,
         "i",
-      ).test(q.trim()) ||
-      (sub && typeof sub === "object" && sub.alt?.test(q.trim()))
+      ).test(q.trim()) || alt?.test(q.trim())
         ? {}
         : null,
     build: () => {
       const inputs = {};
-      const out = h("div", { class: "w-calc-out" });
+      const focalVal = h("div", { class: "w-big w-calcf-val" });
+      const focalLabel = h("div", { class: "w-focal-cap" });
+      const hint = h("div", { class: "w-calcf-hint" }, empty);
+      const list = h("dl", { class: "w-kv flush" });
+      const rows = new Map();
+      const vis = visual?.();
+      const panel = h(
+        "div",
+        { class: "w-calcf-panel", role: "status", "aria-live": "polite" },
+        h("div", { class: "w-focal" }, focalVal, focalLabel),
+        hint,
+        vis?.el,
+        list,
+      );
       const run = () => {
         const vals = {};
         for (const k in inputs) vals[k] = parseFloat(inputs[k].value);
-        out.replaceChildren(
-          ...compute(vals).map(([l, v]) =>
-            h(
-              "div",
-              { class: "w-stat" },
-              h("span", { class: "w-stat-label" }, l),
-              h("span", { class: "w-stat-val" }, v),
-            ),
-          ),
-        );
+        const res = compute(vals);
+        panel.classList.toggle("is-empty", !res);
+        list.hidden = !res?.rows.length;
+        if (!res) {
+          vis?.update(null);
+          return;
+        }
+        focalLabel.textContent = res.label;
+        numTick(focalVal, res.value);
+        const seen = new Set(res.rows.map(([l]) => l));
+        for (const [l, r] of rows)
+          if (!seen.has(l)) {
+            r.el.remove();
+            rows.delete(l);
+          }
+        for (const [l, v] of res.rows) {
+          let r = rows.get(l);
+          if (!r) {
+            const val = h("dd");
+            r = {
+              val,
+              el: h("div", { class: "w-kv-row" }, h("dt", null, l), val),
+            };
+            rows.set(l, r);
+          }
+          list.append(r.el);
+          numTick(r.val, v);
+        }
+        vis?.update(vals);
       };
-      const rows = fields.map((f) => {
-        const inp = h("input", {
-          class: "w-input",
-          type: "number",
-          placeholder: f.ph || "",
-          value: f.def ?? "",
-          step: "any",
-        });
-        inp.oninput = run;
-        inputs[f.k] = inp;
-        return h("label", { class: "w-label col" }, f.label, inp);
-      });
-      run();
-      return card(
-        title,
-        typeof sub === "string" ? sub : sub?.text,
-        h("div", { class: "w-form-grid" }, ...rows),
-        out,
+      const grid = h(
+        "div",
+        { class: "w-form-grid w-calcf-grid" },
+        ...fields.map((f) => {
+          const inp = h("input", {
+            class: `w-input w-nnum${f.pre ? " has-pre" : ""}${f.post ? " has-post" : ""}`,
+            type: "number",
+            inputmode: "decimal",
+            placeholder: f.ph || "",
+            value: f.def ?? "",
+            min: "0",
+            step: "any",
+          });
+          if (f.post) inp.style.setProperty("--post", `${f.post.length}ch`);
+          inp.oninput = run;
+          inputs[f.k] = inp;
+          return h(
+            "label",
+            { class: "w-label col" },
+            f.label,
+            h(
+              "span",
+              { class: "w-calcf-field" },
+              f.pre && h("span", { class: "w-calcf-affix pre" }, f.pre),
+              inp,
+              f.post && h("span", { class: "w-calcf-affix post" }, f.post),
+            ),
+          );
+        }),
       );
+      run();
+      return card(title, sub, grid, panel);
     },
   });
 
-calc(
-  "bmi",
-  "bmi calculator",
-  { text: "body mass index" },
-  [
-    { k: "w", label: "weight (kg)", ph: "70", def: 70 },
-    { k: "h", label: "height (cm)", ph: "175", def: 175 },
+calc({
+  id: "bmi",
+  title: "bmi calculator",
+  sub: "body mass index",
+  empty: "enter your weight and height",
+  fields: [
+    { k: "w", label: "weight", ph: "70", def: 70, post: "kg" },
+    { k: "h", label: "height", ph: "175", def: 175, post: "cm" },
   ],
-  ({ w, h: ht }) => {
-    if (!w || !ht) return [["bmi", "—"]];
-    const bmi = w / (ht / 100) ** 2;
-    const cat =
-      bmi < 18.5
-        ? "underweight"
-        : bmi < 25
-          ? "normal"
-          : bmi < 30
-            ? "overweight"
-            : "obese";
-    return [
-      ["bmi", bmi.toFixed(1)],
-      ["category", cat],
-    ];
+  compute: ({ w, h: ht }) => {
+    if (!(w > 0) || !(ht > 0)) return null;
+    const m2 = (ht / 100) ** 2;
+    return {
+      value: (w / m2).toFixed(1),
+      label: "bmi",
+      rows: [
+        [
+          "healthy weight",
+          `${Math.round(18.5 * m2)} to ${Math.round(24.9 * m2)} kg`,
+        ],
+      ],
+    };
   },
-);
-
-calc(
-  "tip",
-  "tip calculator",
-  null,
-  [
-    { k: "bill", label: "bill", ph: "50", def: 50 },
-    { k: "pct", label: "tip %", ph: "18", def: 18 },
-    { k: "split", label: "split between", ph: "1", def: 1 },
-  ],
-  ({ bill, pct, split }) => {
-    if (!bill) return [["tip", "—"]];
-    const tip = bill * (pct / 100),
-      total = bill + tip,
-      per = total / (split || 1);
-    return [
-      ["tip", `$${tip.toFixed(2)}`],
-      ["total", `$${total.toFixed(2)}`],
-      ...(split > 1 ? [["per person", `$${per.toFixed(2)}`]] : []),
+  visual: () => {
+    const lo = 12;
+    const hi = 40;
+    const bands = [
+      ["underweight", 18.5, "under"],
+      ["normal", 25, "normal"],
+      ["overweight", 30, "over"],
+      ["obese", hi, "obese"],
     ];
+    let from = lo;
+    const segs = bands.map(([name, to, short]) => {
+      const grow = String(to - from);
+      const bar = h("div", {
+        class: `w-bmi-seg ${short}`,
+        style: { flexGrow: grow },
+      });
+      const label = h(
+        "div",
+        { class: "w-bmi-label", style: { flexGrow: grow } },
+        h("span", { class: "w-bmi-full" }, name),
+        h("span", { class: "w-bmi-short" }, short),
+      );
+      from = to;
+      return { bar, label, to };
+    });
+    const marker = h("div", { class: "w-bmi-marker" });
+    const el = h(
+      "div",
+      { class: "w-bmi", "aria-hidden": "true" },
+      h("div", { class: "w-bmi-track" }, ...segs.map((s) => s.bar), marker),
+      h("div", { class: "w-bmi-labels" }, ...segs.map((s) => s.label)),
+    );
+    return {
+      el,
+      update: (vals) => {
+        const bmi = vals && vals.w / (vals.h / 100) ** 2;
+        const ok = vals?.w > 0 && vals?.h > 0 && Number.isFinite(bmi);
+        el.hidden = !ok;
+        if (!ok) return;
+        const t = Math.max(0, Math.min(1, (bmi - lo) / (hi - lo)));
+        marker.style.left = `${(t * 100).toFixed(2)}%`;
+        const active = segs.find((s) => bmi < s.to) ?? segs[segs.length - 1];
+        for (const s of segs) s.label.classList.toggle("on", s === active);
+      },
+    };
   },
-);
+});
 
-calc(
-  "loan",
-  "loan calculator",
-  { text: "monthly payment", alt: /^(?:mortgage|loan)\s+calculator$/i },
-  [
-    { k: "p", label: "principal", ph: "20000", def: 20000 },
-    { k: "rate", label: "annual rate %", ph: "5", def: 5 },
-    { k: "years", label: "term (years)", ph: "5", def: 5 },
+calc({
+  id: "tip",
+  title: "tip calculator",
+  empty: "enter the bill amount",
+  fields: [
+    { k: "bill", label: "bill", ph: "50", def: 50, pre: "$" },
+    { k: "pct", label: "tip", ph: "18", def: 18, post: "%" },
+    { k: "split", label: "people", ph: "1", def: 1 },
   ],
-  ({ p, rate, years }) => {
-    if (!p || !years) return [["payment", "—"]];
-    const r = rate / 100 / 12,
-      n = years * 12;
+  compute: ({ bill, pct, split }) => {
+    if (!(bill > 0)) return null;
+    const tip = bill * ((pct || 0) / 100);
+    const total = bill + tip;
+    const people = Math.max(1, Math.round(split) || 1);
+    return {
+      value: money(tip),
+      label: "tip",
+      rows: [
+        ["total", money(total)],
+        ...(people > 1
+          ? [
+              ["tip per person", money(tip / people)],
+              ["total per person", money(total / people)],
+            ]
+          : []),
+      ],
+    };
+  },
+});
+
+calc({
+  id: "loan",
+  title: "loan calculator",
+  alt: /^(?:mortgage|loan)\s+calculator$/i,
+  empty: "enter the amount and term",
+  fields: [
+    { k: "p", label: "amount", ph: "20000", def: 20000, pre: "$" },
+    { k: "rate", label: "interest rate", ph: "5", def: 5, post: "%" },
+    { k: "years", label: "term", ph: "5", def: 5, post: "years" },
+  ],
+  compute: ({ p, rate, years }) => {
+    if (!(p > 0) || !(years > 0)) return null;
+    const r = (rate || 0) / 100 / 12;
+    const n = years * 12;
     const m = r ? (p * r) / (1 - (1 + r) ** -n) : p / n;
-    return [
-      ["monthly", `$${m.toFixed(2)}`],
-      ["total paid", `$${(m * n).toFixed(2)}`],
-      ["total interest", `$${(m * n - p).toFixed(2)}`],
-    ];
+    return {
+      value: money(m),
+      label: `per month for ${Math.round(n)} months`,
+      rows: [
+        ["total interest", money(m * n - p)],
+        ["total paid", money(m * n)],
+      ],
+    };
   },
-);
+  visual: () => {
+    const s = splitBar("principal", "interest");
+    return {
+      el: s.el,
+      update: (v) => {
+        if (!v) return s.update(0, 0);
+        const r = (v.rate || 0) / 100 / 12;
+        const n = v.years * 12;
+        const m = r ? (v.p * r) / (1 - (1 + r) ** -n) : v.p / n;
+        s.update(v.p, m * n - v.p);
+      },
+    };
+  },
+});
 
-calc(
-  "discount",
-  "discount calculator",
-  null,
-  [
-    { k: "price", label: "price", ph: "80", def: 80 },
-    { k: "pct", label: "discount %", ph: "25", def: 25 },
+calc({
+  id: "discount",
+  title: "discount calculator",
+  empty: "enter the original price",
+  fields: [
+    { k: "price", label: "price", ph: "80", def: 80, pre: "$" },
+    { k: "pct", label: "discount", ph: "25", def: 25, post: "%" },
   ],
-  ({ price, pct }) => {
-    if (!price) return [["final", "—"]];
-    const save = price * (pct / 100);
-    return [
-      ["you save", `$${save.toFixed(2)}`],
-      ["final price", `$${(price - save).toFixed(2)}`],
-    ];
+  compute: ({ price, pct }) => {
+    if (!(price > 0)) return null;
+    const save = price * (Math.min(100, pct || 0) / 100);
+    return {
+      value: money(price - save),
+      label: "you pay",
+      rows: [["you save", money(save)]],
+    };
   },
-);
+});
 
 reg({
   id: "percent",
@@ -2798,61 +3873,71 @@ reg({
     return null;
   },
   build: (p) => {
-    if (p.kind === "of") {
-      const r = (p.a / 100) * p.b;
-      return card(
-        "percentage",
-        `${p.a}% of ${p.b}`,
-        h("div", { class: "w-nres" }, String(+r.toFixed(6))),
-      );
-    }
-    const a = h("input", {
-      class: "w-input w-nnum",
-      type: "number",
-      value: "25",
-      step: "any",
-      "aria-label": "Percentage",
-    });
-    const b = h("input", {
-      class: "w-input w-nnum",
-      type: "number",
-      value: "200",
-      step: "any",
-      "aria-label": "Amount",
-    });
-    const focal = h("div", {
-      class: "w-nres",
-      role: "status",
-      "aria-live": "polite",
-    });
-    const focalCap = h("div", { class: "w-sub" });
-    const out = h("div", { class: "w-calc-out" });
+    const fmt = (x) =>
+      Number.isFinite(x)
+        ? x.toLocaleString("en-US", { maximumFractionDigits: 4 })
+        : "?";
+    const field = (value, label) =>
+      h("input", {
+        class: "w-input w-nnum",
+        type: "number",
+        inputmode: "decimal",
+        value: String(value),
+        step: "any",
+        "aria-label": label,
+      });
+    const a = field(p.a ?? 25, "Percentage");
+    a.classList.add("has-post");
+    const b = field(p.b ?? 200, "Amount");
+    const focal = h("div", { class: "w-big" });
+    const focalCap = h("div", { class: "w-focal-cap" });
+    const line = (label) => {
+      const l = h("dt", null, label);
+      const v = h("dd", { class: "w-tick" });
+      return { l, v, el: h("div", { class: "w-kv-row" }, l, v) };
+    };
+    const share = line();
+    const change = line();
     const run = () => {
-      const x = +a.value,
-        y = +b.value;
-      focal.textContent = String(+((x / 100) * y).toFixed(4));
-      focalCap.textContent = `${x}% of ${y}`;
-      out.replaceChildren(
-        h(
-          "div",
-          { class: "w-stat" },
-          h("span", { class: "w-stat-label" }, `${x} is what % of ${y}`),
-          h(
-            "span",
-            { class: "w-stat-val" },
-            y ? `${+((x / y) * 100).toFixed(4)}%` : "—",
-          ),
-        ),
-      );
+      const x = a.value === "" ? Number.NaN : +a.value;
+      const y = b.value === "" ? Number.NaN : +b.value;
+      const ok = Number.isFinite(x) && Number.isFinite(y);
+      numTick(focal, ok ? fmt((x / 100) * y) : "?");
+      focalCap.textContent = ok
+        ? `${fmt(x)}% of ${fmt(y)}`
+        : "enter two numbers";
+      share.l.textContent = ok ? `${fmt(x)} is what % of ${fmt(y)}` : "share";
+      numTick(share.v, ok && y ? `${fmt((x / y) * 100)}%` : "?");
+      change.l.textContent = ok
+        ? `change from ${fmt(x)} to ${fmt(y)}`
+        : "change";
+      const d = ((y - x) / Math.abs(x)) * 100;
+      numTick(change.v, ok && x ? `${d > 0 ? "+" : ""}${fmt(d)}%` : "?");
     };
     a.oninput = b.oninput = run;
     run();
     return card(
-      "percentage calculator",
+      p.kind === "of" ? "percentage" : "percentage calculator",
       null,
-      h("div", { class: "w-focal" }, focal, focalCap),
-      h("div", { class: "w-row" }, a, h("span", { class: "w-mid" }, "% of"), b),
-      out,
+      h(
+        "div",
+        { class: "w-focal", role: "status", "aria-live": "polite" },
+        focal,
+        focalCap,
+      ),
+      h(
+        "div",
+        { class: "w-pct-inputs" },
+        h(
+          "span",
+          { class: "w-calcf-field" },
+          a,
+          h("span", { class: "w-calcf-affix post" }, "%"),
+        ),
+        h("span", { class: "w-mid" }, "of"),
+        b,
+      ),
+      h("dl", { class: "w-kv" }, share.el, change.el),
     );
   },
 });
@@ -2864,54 +3949,112 @@ reg({
     const w = h("input", {
       class: "w-input w-num w-nnum",
       type: "number",
+      inputmode: "numeric",
       value: "1920",
       "aria-label": "Width",
     });
     const hh = h("input", {
       class: "w-input w-num w-nnum",
       type: "number",
+      inputmode: "numeric",
       value: "1080",
       "aria-label": "Height",
     });
-    const focal = h("div", {
-      class: "w-nres",
-      role: "status",
-      "aria-live": "polite",
-    });
-    const focalCap = h("div", { class: "w-sub" }, "simplified ratio");
-    const out = h("div", { class: "w-calc-out" });
+    const focal = h("div", { class: "w-big" });
+    const caption = h("div", { class: "w-focal-cap" });
+    const shape = h("div", { class: "w-aspect-shape" });
+    const presets = [
+      [16, 9],
+      [4, 3],
+      [3, 2],
+      [1, 1],
+      [21, 9],
+      [9, 16],
+    ];
     const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+    const presetBtns = presets.map(([pw, ph]) => {
+      const b = h(
+        "button",
+        {
+          class: "w-aspect-preset",
+          type: "button",
+          "aria-label": `set ratio to ${pw} by ${ph}`,
+        },
+        `${pw}:${ph}`,
+      );
+      b.onclick = () => {
+        const long = Math.max(+w.value, +hh.value) || 1920;
+        const k = Math.max(1, Math.round(long / Math.max(pw, ph)));
+        w.value = String(k * pw);
+        hh.value = String(k * ph);
+        run();
+      };
+      return { b, key: `${pw}:${ph}` };
+    });
     const run = () => {
       const a = Math.round(+w.value),
         b = Math.round(+hh.value);
-      if (!a || !b) {
-        focal.textContent = "—";
-        out.replaceChildren();
+      const ok = a > 0 && b > 0;
+      shape.classList.toggle("empty", !ok);
+      if (!ok) {
+        numTick(focal, "?");
+        caption.textContent = "enter a width and height";
+        for (const p of presetBtns) p.b.setAttribute("aria-pressed", "false");
         return;
       }
       const g = gcd(a, b);
-      focal.replaceChildren(
-        `${a / g}`,
-        h("span", { class: "w-nres-op" }, ":"),
-        `${b / g}`,
-      );
-      out.replaceChildren(
-        h(
-          "div",
-          { class: "w-stat" },
-          h("span", { class: "w-stat-label" }, "decimal"),
-          h("span", { class: "w-stat-val" }, (a / b).toFixed(4)),
-        ),
-      );
+      const key = `${a / g}:${b / g}`;
+      if (focal.dataset.key !== key) {
+        focal.dataset.key = key;
+        focal.replaceChildren(
+          `${a / g}`,
+          h("span", { class: "w-nres-op" }, ":"),
+          `${b / g}`,
+        );
+        if (focal.isConnected && !calmMotion())
+          focal.animate(
+            [
+              { opacity: 0.4, filter: "blur(2px)", translate: "0 0.18em" },
+              { opacity: 1, filter: "blur(0)", translate: "0 0" },
+            ],
+            { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
+          );
+      }
+      caption.textContent = `${a === b ? "square" : a > b ? "landscape" : "portrait"}, ${+(a / b).toFixed(4)} to 1`;
+      const fit = a / b / (18 / 11);
+      shape.style.width = `${Math.max(8, Math.min(1, fit) * 100)}%`;
+      shape.style.height = `${Math.max(8, Math.min(1, 1 / fit) * 100)}%`;
+      for (const p of presetBtns)
+        p.b.setAttribute("aria-pressed", String(p.key === key));
     };
     w.oninput = hh.oninput = run;
     run();
     return card(
       "aspect ratio",
       null,
-      h("div", { class: "w-focal" }, focal, focalCap),
-      h("div", { class: "w-row" }, w, h("span", { class: "w-mid" }, "×"), hh),
-      out,
+      h(
+        "div",
+        { class: "w-aspect-top" },
+        h(
+          "div",
+          { class: "w-focal", role: "status", "aria-live": "polite" },
+          focal,
+          caption,
+        ),
+        h("div", { class: "w-aspect-stage", "aria-hidden": "true" }, shape),
+      ),
+      h(
+        "div",
+        { class: "w-row w-aspect-dims" },
+        w,
+        h("span", { class: "w-mid" }, "×"),
+        hh,
+      ),
+      h(
+        "div",
+        { class: "w-aspect-presets", role: "group", "aria-label": "presets" },
+        ...presetBtns.map((p) => p.b),
+      ),
     );
   },
 });
@@ -2930,49 +4073,121 @@ reg({
       return { n: 255, to: "all" };
     return null;
   },
-  build: ({ n }) => {
+  build: ({ n, to }) => {
+    const target = to.startsWith("hex") ? "hex" : to === "all" ? "decimal" : to;
+    const bases = [
+      ["decimal", "", 10, 3],
+      ["binary", "0b", 2, 4],
+      ["octal", "0o", 8, 3],
+      ["hex", "0x", 16, 4],
+    ].map(([name, prefix, radix, size]) => ({ name, prefix, radix, size }));
+    const hero = bases.find((b) => b.name === target);
     const inp = h("input", {
-      class: "w-input w-nnum",
-      type: "number",
-      value: n,
-      "aria-label": "Decimal number",
+      class: "w-input w-mono",
+      value: String(n),
+      spellcheck: "false",
+      autocomplete: "off",
+      autocapitalize: "off",
+      placeholder: "255, 0xff, 0b1010 or 0o17",
+      "aria-label": "Number, prefix with 0x, 0b or 0o for other bases",
     });
-    const out = h("div", {
-      class: "w-calc-out",
-      role: "status",
-      "aria-live": "polite",
-    });
+    const parse = (raw) => {
+      const s = raw
+        .trim()
+        .replace(/[\s_,]/g, "")
+        .toLowerCase();
+      const m = s.match(/^(-?)(0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+)$/);
+      if (!m) return null;
+      const v = BigInt(m[2]);
+      return m[1] ? -v : v;
+    };
+    const format = (b, v) => {
+      const abs = v < 0n ? -v : v;
+      const digits = abs.toString(b.radix).toUpperCase();
+      return {
+        sign: v < 0n ? "-" : "",
+        digits:
+          b.radix === 10
+            ? abs.toLocaleString("en-US")
+            : digits.replace(new RegExp(`\\B(?=(.{${b.size}})+$)`, "g"), " "),
+        raw: `${v < 0n ? "-" : ""}${b.prefix}${digits}`,
+      };
+    };
+    const heroVal = h("span", { class: "w-base-digits" });
+    const heroPrefix = h("span", { class: "w-base-prefix" });
+    const big = h(
+      "div",
+      { class: "w-big w-mono w-base-big" },
+      heroPrefix,
+      heroVal,
+    );
+    let heroRaw = "";
+    const rows = bases
+      .filter((b) => b !== hero)
+      .map((b) => {
+        const val = h("span", { class: "w-base-digits" });
+        const prefix = h("span", { class: "w-base-prefix" });
+        const r = { b, val, prefix, raw: "" };
+        r.row = [
+          b.name,
+          h("span", null, prefix, val),
+          { mono: true, copy: () => r.raw },
+        ];
+        return r;
+      });
+    const note = h("div", { class: "w-focal-cap" });
+    const out = kvList(rows.map((r) => r.row));
     const run = () => {
-      const v = parseInt(inp.value, 10);
-      if (!Number.isFinite(v)) return out.replaceChildren();
-      out.replaceChildren(
-        ...[
-          ["decimal", v.toString(10), false],
-          ["binary", `0b${v.toString(2)}`, true],
-          ["octal", `0o${v.toString(8)}`, true],
-          ["hex", `0x${v.toString(16).toUpperCase()}`, true],
-        ].map(([l, val, code]) =>
-          h(
-            "div",
-            { class: "w-stat" },
-            h("span", { class: "w-stat-label" }, l),
-            h(
-              "span",
-              { class: "w-row" },
-              h(
-                "span",
-                { class: code ? "w-stat-val w-mono" : "w-stat-val" },
-                val,
-              ),
-              copyBtn(() => val, `Copy ${l} value`),
-            ),
-          ),
-        ),
-      );
+      const v = parse(inp.value);
+      const bad = v == null && inp.value.trim() !== "";
+      inp.setAttribute("aria-invalid", String(bad));
+      out.classList.toggle("empty", v == null);
+      if (v == null) {
+        numTick(heroVal, "?");
+        heroPrefix.textContent = "";
+        heroRaw = "";
+        for (const r of rows) {
+          r.prefix.textContent = "";
+          numTick(r.val, "?");
+          r.raw = "";
+        }
+        note.textContent = bad
+          ? "use digits, or a 0x, 0b or 0o prefix"
+          : `enter a number to see it in ${hero.name}`;
+        return;
+      }
+      const f = format(hero, v);
+      heroPrefix.textContent = `${f.sign}${hero.prefix}`;
+      numTick(heroVal, f.digits);
+      big.classList.toggle("long", f.digits.length > 18);
+      heroRaw = f.raw;
+      note.textContent = hero.name;
+      for (const r of rows) {
+        const g = format(r.b, v);
+        r.prefix.textContent = `${g.sign}${r.b.prefix}`;
+        numTick(r.val, g.digits);
+        r.raw = g.raw;
+      }
     };
     inp.oninput = run;
     run();
-    return card("number base converter", null, inp, out);
+    return card(
+      "number base converter",
+      null,
+      h(
+        "div",
+        { class: "w-base-hero" },
+        h(
+          "div",
+          { class: "w-focal", role: "status", "aria-live": "polite" },
+          big,
+          note,
+        ),
+        copyBtn(() => heroRaw, `copy ${hero.name}`),
+      ),
+      inp,
+      out,
+    );
   },
 });
 
@@ -3005,14 +4220,19 @@ reg({
       [4, "IV"],
       [1, "I"],
     ];
-    const toRoman = (n) => {
-      let r = "";
-      for (const [v, s] of map)
+    const toParts = (n) => {
+      const parts = [];
+      for (const [v, s] of map) {
+        let sym = "";
+        let val = 0;
         while (n >= v) {
-          r += s;
+          sym += s;
+          val += v;
           n -= v;
         }
-      return r;
+        if (sym) parts.push([sym, val]);
+      }
+      return parts;
     };
     const fromRoman = (s) => {
       let n = 0;
@@ -3028,32 +4248,70 @@ reg({
       class: "w-input",
       value: p.roman || p.n,
       spellcheck: "false",
+      autocomplete: "off",
+      autocapitalize: "characters",
+      placeholder: "2024 or MMXXIV",
       "aria-label": "Number or roman numeral",
     });
-    const out = h("div", {
-      class: "w-nres w-roman-out",
-      role: "status",
-      "aria-live": "polite",
-    });
+    const out = h("div", { class: "w-big w-roman-out" });
+    const note = h("div", { class: "w-focal-cap" });
+    const parts = h("div", { class: "w-roman-parts", "aria-hidden": "true" });
     const run = () => {
       const v = inp.value.trim();
-      out.textContent = /^[ivxlcdm]+$/i.test(v)
-        ? fromRoman(v.toUpperCase())
-        : +v >= 1 && +v <= 3999
-          ? toRoman(Math.floor(+v))
-          : "—";
+      let list = [];
+      let bad = false;
+      if (/^[ivxlcdm]+$/i.test(v)) {
+        const up = v.toUpperCase();
+        const n = fromRoman(up);
+        list = n >= 1 && n <= 3999 ? toParts(n) : [];
+        const canon = list.map(([s]) => s).join("");
+        numTick(out, n >= 1 ? String(n) : "?");
+        note.textContent =
+          n > 3999
+            ? `${up} as a number, standard numerals stop at 3999`
+            : canon !== up
+              ? `${up} isn't standard, ${n} is written ${canon}`
+              : `${up} as a number`;
+      } else if (/^\d+$/.test(v) && +v >= 1 && +v <= 3999) {
+        list = toParts(+v);
+        numTick(out, list.map(([s]) => s).join(""));
+        note.textContent = `${+v} in roman numerals`;
+      } else {
+        bad = v !== "";
+        numTick(out, "?");
+        note.textContent = bad
+          ? "enter a whole number from 1 to 3999, or a numeral"
+          : "enter a number or a numeral";
+      }
+      inp.setAttribute("aria-invalid", String(bad));
+      parts.replaceChildren(
+        ...(list.length > 1 ? list : []).map(([sym, val]) =>
+          h(
+            "span",
+            { class: "w-roman-part" },
+            h("span", { class: "w-roman-sym" }, sym),
+            h("span", { class: "w-roman-num" }, String(val)),
+          ),
+        ),
+      );
     };
     inp.oninput = run;
     run();
     return card(
       "roman numerals",
-      "number ↔ roman (1–3999)",
+      null,
       h(
         "div",
-        { class: "w-out-row w-roman-row" },
-        out,
-        copyBtn(() => out.textContent, "Copy result"),
+        { class: "w-roman-row" },
+        h(
+          "div",
+          { class: "w-focal", role: "status", "aria-live": "polite" },
+          out,
+          note,
+        ),
+        copyBtn(() => out.textContent, "copy result"),
       ),
+      parts,
       inp,
     );
   },
@@ -3070,50 +4328,96 @@ reg({
   },
   build: ({ n, kind }) => {
     n = Math.floor(n);
-    const isPrime = (x) => {
-      if (x < 2) return false;
-      for (let i = 2; i * i <= x; i++) if (x % i === 0) return false;
-      return true;
-    };
-    const factorize = (x) => {
-      const f = [];
-      for (let d = 2; d * d <= x; d++)
-        while (x % d === 0) {
-          f.push(d);
-          x /= d;
-        }
-      if (x > 1) f.push(x);
-      return f;
-    };
-    if (kind === "prime") {
-      const prime = isPrime(n);
+    const title = kind === "prime" ? "prime check" : "prime factorization";
+    const shown = n.toLocaleString("en-US");
+    if (!Number.isSafeInteger(n))
       return card(
-        "prime check",
+        title,
         null,
-        h("div", { class: "w-nres" }, String(n)),
+        h("div", { class: "w-big" }, "too large"),
         h(
           "div",
-          { class: `w-verdict${prime ? "" : " no"}` },
-          prime ? "is prime" : "is not prime",
+          { class: "w-focal-cap" },
+          "this works up to 9,007,199,254,740,991",
         ),
       );
-    }
-    const f = factorize(n);
-    const counts = {};
-    for (const p of f) counts[p] = (counts[p] || 0) + 1;
-    const terms = Object.entries(counts).flatMap(([p, c], i) => [
+    const f = [];
+    let x = n;
+    for (let d = 2; d * d <= x; d++)
+      while (x % d === 0) {
+        f.push(d);
+        x /= d;
+      }
+    if (x > 1) f.push(x);
+    const prime = n > 1 && f.length === 1;
+    const counts = new Map();
+    for (const p of f) counts.set(p, (counts.get(p) || 0) + 1);
+    const verdict = h(
+      "div",
+      { class: `w-verdict${prime ? "" : " no"}` },
+      prime ? "prime" : "not prime",
+    );
+    if (kind === "prime")
+      return card(
+        title,
+        null,
+        h(
+          "div",
+          { class: "w-focal" },
+          h("div", { class: "w-big" }, shown),
+          h(
+            "div",
+            { class: "w-focal-cap" },
+            prime
+              ? "only divisible by 1 and itself"
+              : n < 2
+                ? "primes start at 2"
+                : `${shown} = ${f.join(" × ")}`,
+          ),
+        ),
+        verdict,
+      );
+    if (n < 2)
+      return card(
+        title,
+        null,
+        h(
+          "div",
+          { class: "w-focal" },
+          h("div", { class: "w-big" }, shown),
+          h("div", { class: "w-focal-cap" }, "has no prime factors"),
+        ),
+      );
+    const divisors = [...counts.values()].reduce((a, c) => a * (c + 1), 1);
+    const terms = [...counts].flatMap(([p, c], i) => [
       i ? h("span", { class: "w-nres-op" }, "×") : null,
-      c > 1 ? h("span", null, p, h("sup", null, c)) : h("span", null, p),
+      h(
+        "span",
+        null,
+        p.toLocaleString("en-US"),
+        c > 1 ? h("sup", null, c) : null,
+      ),
     ]);
+    if (prime)
+      return card(
+        title,
+        null,
+        h("div", { class: "w-focal" }, h("div", { class: "w-big" }, shown)),
+        verdict,
+      );
     return card(
-      "prime factorization",
-      `${n} =`,
-      f.length === 1
-        ? h("div", { class: "w-nres" }, String(n))
-        : h("div", { class: "w-nres" }, ...terms),
-      f.length === 1
-        ? h("div", { class: "w-verdict" }, "is prime")
-        : h("div", { class: "w-sub" }, `factors: ${f.join(", ")}`),
+      title,
+      `of ${shown}`,
+      h(
+        "div",
+        { class: "w-focal" },
+        h("div", { class: "w-big w-factor-terms" }, ...terms),
+        h(
+          "div",
+          { class: "w-focal-cap" },
+          `${f.length} prime factors, ${divisors} divisors`,
+        ),
+      ),
     );
   },
 });
@@ -3132,46 +4436,47 @@ reg({
     return nums.length >= 2 ? { nums } : null;
   },
   build: ({ nums }) => {
-    const n = nums.length,
-      sum = nums.reduce((a, b) => a + b, 0),
-      mean = sum / n;
+    const n = nums.length;
+    const sum = nums.reduce((a, b) => a + b, 0);
+    const mean = sum / n;
     const sorted = [...nums].sort((a, b) => a - b);
     const median =
       n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
-    const variance = nums.reduce((a, b) => a + (b - mean) ** 2, 0) / n;
-    const r = (x) => +x.toFixed(4);
+    const sq = nums.reduce((a, b) => a + (b - mean) ** 2, 0);
+    const r = (x) => x.toLocaleString("en-US", { maximumFractionDigits: 4 });
     return card(
       "statistics",
-      `${n} values`,
+      null,
       h(
         "div",
         { class: "w-focal" },
-        h("div", { class: "w-nres" }, String(r(mean))),
-        h("div", { class: "w-sub" }, "mean"),
+        h("div", { class: "w-big" }, r(mean)),
+        h("div", { class: "w-focal-cap" }, "mean"),
       ),
       h(
-        "div",
-        { class: "w-calc-out" },
+        "dl",
+        { class: "w-stats-grid" },
         ...[
-          ["median", r(median)],
+          ["median", median],
           ["sum", sum],
+          ["std dev", Math.sqrt(sq / n)],
+          ["sample std dev", Math.sqrt(sq / (n - 1))],
           ["min", sorted[0]],
           ["max", sorted[n - 1]],
-          ["std dev", r(Math.sqrt(variance))],
+          ["range", sorted[n - 1] - sorted[0]],
+          ["count", n],
         ].map(([l, v]) =>
           h(
             "div",
-            { class: "w-stat" },
-            h("span", { class: "w-stat-label" }, l),
-            h("span", { class: "w-stat-val" }, v),
+            { class: "w-stats-tile" },
+            h("dt", { class: "w-stats-tile-label" }, l),
+            h("dd", { class: "w-stats-tile-val" }, r(v)),
           ),
         ),
       ),
     );
   },
 });
-
-////// date / time ///////////////////////////////////////////////////////////
 
 const TZ_ALIAS = {
   utc: "UTC",
@@ -3472,12 +4777,12 @@ const CLOCK_FILLER = new Set([
   "real",
 ]);
 
-const odometer = (cls) => {
+const odometer = (cls, dir = 1, still = 0) => {
   const el = h("span", { class: cls ? `w-od ${cls}` : "w-od" });
   const live = h("span", { class: "w-sr" });
   const reels = h("span", { class: "w-od-in", "aria-hidden": "true" });
   el.append(live, reels);
-  const at = (i) => `translateY(${(-i * 100) / 20}%)`;
+  const at = (i) => `translateY(calc(${-i} * (1lh + 0.2em)))`;
   const jump = (reel, i) => {
     reel.style.transition = "none";
     reel.style.transform = at(i);
@@ -3486,10 +4791,10 @@ const odometer = (cls) => {
   };
   let shape = null;
   const set = (str) => {
-    const next = [...str].map((c) => (c >= "0" && c <= "9" ? "#" : c)).join("");
-    const fresh = next !== shape;
+    const chars = [...str];
+    const next = chars.map((c) => (c >= "0" && c <= "9" ? "#" : c)).join("");
     live.textContent = str;
-    if (fresh) {
+    if (next !== shape) {
       shape = next;
       reels.replaceChildren(
         ...[...next].map((c) =>
@@ -3497,32 +4802,38 @@ const odometer = (cls) => {
             ? h(
                 "span",
                 { class: "w-od-d" },
+                h("span", { class: "w-od-g" }, "0"),
                 h(
                   "span",
                   { class: "w-od-r" },
-                  Array.from({ length: 20 }, (_, i) => h("span", null, i % 10)),
+                  Array.from({ length: 30 }, (_, i) => h("span", null, i % 10)),
                 ),
               )
             : h("span", { class: "w-od-s" }, c),
         ),
       );
     }
-    [...str].forEach((c, i) => {
+    let left = chars.filter((c) => c >= "0" && c <= "9").length;
+    chars.forEach((c, i) => {
+      if (!(c >= "0" && c <= "9")) return;
+      left--;
       const cell = reels.children[i];
-      if (!cell || !(c >= "0" && c <= "9") || cell.dataset.v === c) return;
-      const reel = cell.firstChild;
+      if (!cell || cell.dataset.v === c) return;
+      const reel = cell.lastChild;
       const to = +c;
       const parked = cell.dataset.v ? +cell.dataset.i : null;
       cell.dataset.v = c;
-      if (parked == null) {
-        cell.dataset.i = to;
-        jump(reel, to);
+      if (parked == null || left < still) {
+        cell.dataset.i = 10 + to;
+        jump(reel, 10 + to);
         return;
       }
-      if (parked > 9) jump(reel, parked - 10);
-      const up = to < parked % 10 ? to + 10 : to;
-      cell.dataset.i = up;
-      reel.style.transform = at(up);
+      const from = parked % 10;
+      if (parked !== 10 + from) jump(reel, 10 + from);
+      const target =
+        dir > 0 ? (to > from ? 10 + to : 20 + to) : to < from ? 10 + to : to;
+      cell.dataset.i = target;
+      reel.style.transform = at(target);
     });
   };
   return { el, set };
@@ -3680,7 +4991,7 @@ reg({
             },
           };
         })();
-    const secs = odometer("w-clock-secs");
+    const secs = h("span", { class: "w-clock-secs" });
     const ampm = h("span", { class: "w-clock-ampm" });
     const sub = h("div", { class: "w-clock-sub" });
     const zone = h("div", { class: "w-clock-zone" });
@@ -3693,17 +5004,16 @@ reg({
         "div",
         { class: "w-clock-big" },
         big.el,
-        isTime && h("div", { class: "w-clock-tail" }, secs.el, ampm),
+        isTime && h("div", { class: "w-clock-tail" }, secs, ampm),
       ),
       sub,
       zone,
     );
 
     let offMin = 0;
+    let seen = false;
     let copyText = "";
-    let iv = null;
     const tick = () => {
-      if (iv && !hero.isConnected) return clearInterval(iv);
       const now = new Date();
       const p = {};
       for (const { type, value } of partsF.formatToParts(now)) p[type] = value;
@@ -3719,7 +5029,7 @@ reg({
 
       if (isTime) {
         big.set(clock(hour, minute).replace(/ [ap]m$/, ""));
-        secs.set(second);
+        secs.textContent = `:${second}`;
         ampm.textContent = h12 ? (hour < 12 ? "am" : "pm") : "";
         sub.textContent = dateStr;
       } else {
@@ -3762,6 +5072,7 @@ reg({
       const localOff = -now.getTimezoneOffset();
       const delta = offMin - localOff;
       if (!place || delta === 0) {
+        diff.dataset.v = "";
         diff.textContent = place
           ? "same time as you"
           : offMin
@@ -3785,11 +5096,20 @@ reg({
         const dayGap = Math.round((zoneDay - localDay) / 86400000);
         const when =
           dayGap > 0
-            ? " · tomorrow there"
+            ? ", tomorrow there"
             : dayGap < 0
-              ? " · yesterday there"
+              ? ", yesterday there"
               : "";
-        diff.textContent = `${span} ${delta > 0 ? "ahead of" : "behind"} you · ${clock(now.getHours(), String(now.getMinutes()).padStart(2, "0"))} your time${when}`;
+        const parts = [
+          `${span} ${delta > 0 ? "ahead of" : "behind"} you${when}`,
+          `${clock(now.getHours(), String(now.getMinutes()).padStart(2, "0"))} your time`,
+        ];
+        if (diff.dataset.v !== parts.join("|")) {
+          diff.dataset.v = parts.join("|");
+          diff.replaceChildren(
+            ...parts.map((t) => h("span", { class: "w-clock-diff-part" }, t)),
+          );
+        }
       }
 
       copyText = `${clock(hour, minute, second)} · ${dateStr} · ${tz}`;
@@ -3803,12 +5123,36 @@ reg({
         localStorage.setItem("ms-clock-h12", h12 ? "1" : "0");
         unit.textContent = h12 ? "24h" : "12h";
         tick();
+        if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+        const soft = [
+          { opacity: 0, filter: "blur(4px)", transform: "translateY(3px)" },
+          { opacity: 1, filter: "blur(0)", transform: "none" },
+        ];
+        const ease = {
+          duration: 260,
+          easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+        };
+        big.el.animate(soft, ease);
+        ampm.animate(soft, ease);
+        unit.animate(
+          soft.map(({ opacity, filter }) => ({ opacity, filter })),
+          {
+            ...ease,
+            duration: 200,
+          },
+        );
       },
     });
     unit.textContent = h12 ? "24h" : "12h";
 
     tick();
-    iv = setInterval(tick, 1000);
+    const loop = () => {
+      if (hero.isConnected) seen = true;
+      else if (seen) return;
+      tick();
+      setTimeout(loop, 1010 - (Date.now() % 1000));
+    };
+    setTimeout(loop, 1010 - (Date.now() % 1000));
 
     const noun =
       kind === "year"
@@ -3847,60 +5191,66 @@ reg({
   },
   build: ({ date }) => {
     const inp = h("input", {
-      class: "w-input",
+      class: "w-input w-nnum",
       type: "date",
       value: date || "2000-01-01",
-      "aria-label": "Date of birth",
+      required: true,
     });
-    const focal = h("div", {
-      class: "w-nres",
-      role: "status",
-      "aria-live": "polite",
-    });
-    const focalCap = h("div", { class: "w-sub" }, "age today");
-    const out = h("div", { class: "w-calc-out" });
+    const val = h("div", { class: "w-big w-calcf-val" });
+    const cap = h("div", { class: "w-focal-cap" });
+    const hint = h("div", { class: "w-calcf-hint" });
+    const rows = h("dl", { class: "w-kv flush" });
+    const panel = h(
+      "div",
+      { class: "w-calcf-panel", role: "status", "aria-live": "polite" },
+      h("div", { class: "w-focal" }, val, cap),
+      hint,
+      rows,
+    );
+    const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
+    const row = (l, v) =>
+      h("div", { class: "w-kv-row" }, h("dt", null, l), h("dd", null, v));
     const run = () => {
       const [Y, M, D] = (inp.value || "").split("-").map(Number);
       const d = new Date(Y, M - 1, D);
-      if (Number.isNaN(d.getTime()) || !Y) {
-        focal.textContent = "—";
-        out.replaceChildren();
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const bad = Number.isNaN(d.getTime()) || !Y;
+      panel.classList.toggle("is-empty", bad || d > today);
+      if (bad || d > today) {
+        hint.textContent = bad
+          ? "enter a date of birth"
+          : "that date is in the future";
         return;
       }
-      const now = new Date();
-      let y = now.getFullYear() - d.getFullYear();
-      let m = now.getMonth() - d.getMonth();
-      let days = now.getDate() - d.getDate();
+      let y = today.getFullYear() - d.getFullYear();
+      let m = today.getMonth() - d.getMonth();
+      let days = today.getDate() - d.getDate();
       if (days < 0) {
         m--;
-        days += new Date(now.getFullYear(), now.getMonth(), 0).getDate();
+        days += new Date(today.getFullYear(), today.getMonth(), 0).getDate();
       }
       if (m < 0) {
         y--;
         m += 12;
       }
-      const totalDays = Math.floor((now - d) / 86400000);
-      focal.replaceChildren(
-        `${y}`,
-        h("span", { class: "w-nres-unit" }, "y"),
-        `${m}`,
-        h("span", { class: "w-nres-unit" }, "m"),
-        `${days}`,
-        h("span", { class: "w-nres-unit" }, "d"),
+      const totalDays = Math.round((today - d) / 86400000);
+      const bday = new Date(today.getFullYear(), d.getMonth(), d.getDate());
+      if (bday < today) bday.setFullYear(bday.getFullYear() + 1);
+      const toBday = Math.round((bday - today) / 86400000);
+      const turns = bday.getFullYear() - d.getFullYear();
+      val.replaceChildren(
+        String(y),
+        h("span", { class: "w-calcf-unit" }, y === 1 ? "year" : "years"),
       );
-      out.replaceChildren(
-        h(
-          "div",
-          { class: "w-stat" },
-          h("span", { class: "w-stat-label" }, "total days"),
-          h("span", { class: "w-stat-val" }, totalDays.toLocaleString()),
+      cap.textContent = `and ${plural(m, "month")}, ${plural(days, "day")}`;
+      rows.replaceChildren(
+        row(
+          "next birthday",
+          toBday ? `turns ${turns} in ${plural(toBday, "day")}` : "today",
         ),
-        h(
-          "div",
-          { class: "w-stat" },
-          h("span", { class: "w-stat-label" }, "total hours"),
-          h("span", { class: "w-stat-val" }, (totalDays * 24).toLocaleString()),
-        ),
+        row("days old", totalDays.toLocaleString()),
+        row("born on a", d.toLocaleDateString(undefined, { weekday: "long" })),
       );
     };
     inp.oninput = run;
@@ -3908,9 +5258,8 @@ reg({
     return card(
       "age calculator",
       null,
-      h("div", { class: "w-focal" }, focal, focalCap),
-      inp,
-      out,
+      h("label", { class: "w-label col" }, "date of birth", inp),
+      panel,
     );
   },
 });
@@ -3931,32 +5280,66 @@ reg({
       const [Y, M, D] = s.split("-").map(Number);
       return new Date(Y, M - 1, D);
     };
-    const d1 = a ? local(a) : new Date();
+    const now = new Date();
+    const d1 = a
+      ? local(a)
+      : new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const d2 = local(b);
-    const days = Math.round(
-      (d2 - new Date(d1.getFullYear(), d1.getMonth(), d1.getDate())) / 86400000,
-    );
+    const days = Math.round((d2 - d1) / 86400000);
+    const abs = Math.abs(days);
+    const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
+    const fmt = (d) =>
+      d.toLocaleDateString(undefined, {
+        weekday: a ? undefined : "long",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+    const [from, to] = days < 0 ? [d2, d1] : [d1, d2];
+    let workdays = 0;
+    for (const d = new Date(from); d < to; d.setDate(d.getDate() + 1))
+      if (d.getDay() % 6) workdays++;
+    const wk = Math.floor(abs / 7);
+    const row = (l, v) =>
+      h("div", { class: "w-kv-row" }, h("dt", null, l), h("dd", null, v));
     return card(
       "date difference",
       null,
       h(
         "div",
-        { class: "w-focal" },
+        { class: "w-calcf-panel" },
         h(
           "div",
-          { class: "w-nres" },
-          Math.abs(days).toLocaleString(),
+          { class: "w-focal" },
           h(
-            "span",
-            { class: "w-nres-unit" },
-            `day${Math.abs(days) === 1 ? "" : "s"}`,
+            "div",
+            { class: "w-big w-calcf-val" },
+            abs.toLocaleString(),
+            h("span", { class: "w-calcf-unit" }, abs === 1 ? "day" : "days"),
+          ),
+          h(
+            "div",
+            { class: "w-focal-cap" },
+            a
+              ? `from ${fmt(d1)} to ${fmt(d2)}`
+              : days === 0
+                ? `${fmt(d2)} is today`
+                : `${days > 0 ? "until" : "since"} ${fmt(d2)}`,
           ),
         ),
-        h(
-          "div",
-          { class: "w-sub" },
-          a ? `between ${a} and ${b}` : days >= 0 ? `until ${b}` : `since ${b}`,
-        ),
+        abs > 0 &&
+          h(
+            "dl",
+            { class: "w-kv flush" },
+            wk > 0 &&
+              row(
+                "in weeks",
+                abs % 7
+                  ? `${plural(wk, "week")}, ${plural(abs % 7, "day")}`
+                  : plural(wk, "week"),
+              ),
+            row("weekdays", workdays.toLocaleString()),
+          ),
       ),
     );
   },
@@ -3971,56 +5354,67 @@ reg({
     return m ? { ts: +(m[1] || m[2]) } : null;
   },
   build: ({ ts }) => {
-    const ms = ts > 1e12 ? ts : ts * 1000;
+    const isMs = ts > 1e12;
+    const ms = isMs ? ts : ts * 1000;
     const d = new Date(ms);
-    const local = d.toLocaleString();
     const days = Math.round((d - Date.now()) / 86400000);
+    const abs = Math.abs(days);
     const rel =
       days === 0
         ? "today"
-        : days > 0
-          ? `in ${days} day${days === 1 ? "" : "s"}`
-          : `${-days} day${days === -1 ? "" : "s"} ago`;
-    const hero = h(
-      "div",
-      { class: "w-ts-hero" },
-      h("div", { class: "w-ts-big" }, local),
-      h(
-        "div",
-        { class: "w-ts-meta" },
-        h(
-          "div",
-          { class: "w-ts-chips" },
-          h("span", { class: "w-ts-chip" }, String(ts)),
-          h(
-            "span",
-            { class: "w-ts-chip" },
-            ts > 1e12 ? "milliseconds" : "seconds",
-          ),
-        ),
-        copyBtn(() => local, "copy local time"),
-      ),
-    );
+        : `${days > 0 ? "in " : ""}${abs.toLocaleString()} day${abs === 1 ? "" : "s"}${days < 0 ? " ago" : ""}`;
+    const years = abs >= 365 ? Math.round(abs / 365.25) : 0;
+    const parts = new Intl.DateTimeFormat(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    }).formatToParts(d);
+    const clock = parts
+      .filter((p) => p.type !== "dayPeriod")
+      .map((p) => p.value)
+      .join("")
+      .trim();
+    const period = parts.find((p) => p.type === "dayPeriod")?.value;
+    const local = d.toLocaleString();
     return card(
       "unix timestamp",
       null,
-      hero,
       h(
         "div",
-        { class: "w-ts-rows" },
-        ...[
-          ["utc", d.toUTCString(), true],
-          ["iso 8601", d.toISOString(), true],
-          ["relative", rel, false],
-        ].map(([l, v, mono]) =>
-          h(
-            "div",
-            { class: "w-ts-row" },
-            h("span", { class: "w-ts-key" }, l),
-            h("span", { class: `w-ts-val${mono ? " w-mono" : ""}` }, v),
-            copyBtn(() => v),
-          ),
+        { class: "w-ts-hero" },
+        h(
+          "div",
+          { class: "w-ts-big" },
+          clock,
+          period && h("span", { class: "w-ts-ap" }, period.toLowerCase()),
         ),
+        h(
+          "div",
+          { class: "w-ts-date" },
+          d.toLocaleDateString(undefined, {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+          }),
+        ),
+        h(
+          "div",
+          { class: "w-ts-rel" },
+          years ? `${rel}, about ${years} year${years === 1 ? "" : "s"}` : rel,
+        ),
+      ),
+      kvList(
+        [
+          ["local", local],
+          ["utc", d.toUTCString().replace("GMT", "UTC")],
+          ["iso 8601", d.toISOString()],
+          [
+            isMs ? "seconds" : "milliseconds",
+            String(isMs ? Math.floor(ms / 1000) : ms),
+          ],
+        ].map(([l, v]) => [l, v, { copy: true }]),
+        "stack",
       ),
     );
   },
@@ -4039,38 +5433,126 @@ reg({
       ["Tokyo", "Asia/Tokyo"],
       ["Sydney", "Australia/Sydney"],
     ];
+    const mine = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (mine && !zones.some(([, z]) => z === mine))
+      zones.unshift([mine.split("/").at(-1).replaceAll("_", " "), mine, true]);
     let started = false;
+    const stored = localStorage.getItem("ms-clock-h12");
+    const h12 = stored
+      ? stored === "1"
+      : !!new Intl.DateTimeFormat(undefined, {
+          hour: "numeric",
+        }).resolvedOptions().hour12;
     const list = h("div", { class: "w-clock-list" });
-    const rows = zones.map(([name, tz]) => {
+    const rows = zones.map(([name, tz, own]) => {
       const t = odometer("w-clock-time");
-      list.append(
+      const note = h("span", { class: "w-clock-note" });
+      const ampm = h("span", { class: "w-clock-ap" });
+      const row = h(
+        "div",
+        { class: `w-clock-row${own ? " own" : ""}` },
         h(
-          "div",
-          { class: "w-clock-row" },
+          "span",
+          { class: "w-clock-place" },
           h("span", { class: "w-clock-city" }, name),
-          t.el,
+          h(
+            "span",
+            { class: "w-clock-meta" },
+            h("span", {
+              class: "w-clock-sky",
+              "aria-hidden": "true",
+              html: `<svg class="sun" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="moon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9a9 9 0 1 1-9-9z"/></svg>`,
+            }),
+            note,
+          ),
         ),
+        h("span", { class: "w-clock-read" }, t.el, h12 && ampm),
       );
-      return { tz, t };
+      list.append(row);
+      const f = new Intl.DateTimeFormat("en-GB", {
+        timeZone: tz,
+        year: "numeric",
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      });
+      return { f, t, note, row, own, ampm };
     });
     const tick = () => {
       if (started && !list.isConnected) return clearInterval(iv);
       started = true;
-      for (const { tz, t } of rows)
-        t.set(
-          new Intl.DateTimeFormat("en-GB", {
-            timeZone: tz,
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: false,
-          }).format(new Date()),
-        );
+      const now = new Date();
+      const here = Date.UTC(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate(),
+        now.getHours(),
+        now.getMinutes(),
+      );
+      for (const { f, t, note, row, own, ampm } of rows) {
+        const p = {};
+        for (const { type, value } of f.formatToParts(now)) p[type] = value;
+        const hour = +p.hour;
+        t.set(h12 ? `${hour % 12 || 12}:${p.minute}` : `${p.hour}:${p.minute}`);
+        ampm.textContent = hour < 12 ? "am" : "pm";
+        const there = Date.UTC(+p.year, +p.month - 1, +p.day, hour, +p.minute);
+        const diff = Math.round((there - here) / 60000);
+        const dayGap =
+          Date.UTC(+p.year, +p.month - 1, +p.day) / 86400000 -
+          Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86400000;
+        const dh = Math.floor(Math.abs(diff) / 60);
+        const dm = Math.abs(diff) % 60;
+        const off = own
+          ? "your time"
+          : diff
+            ? `${[dh && `${dh}h`, dm && `${dm}m`].filter(Boolean).join(" ")} ${diff > 0 ? "ahead" : "behind"}`
+            : "same as you";
+        const text =
+          dayGap > 0
+            ? `${off}, tomorrow`
+            : dayGap < 0
+              ? `${off}, yesterday`
+              : off;
+        if (note.textContent !== text) note.textContent = text;
+        row.dataset.night = hour < 6 || hour >= 20 ? "1" : "0";
+      }
     };
     const iv = setInterval(tick, 1000);
     tick();
     return card("world clock", null, list);
   },
 });
+
+const playToggle = (off, on, onIcon = "pause") => {
+  const icons = {
+    play: `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.85l11-6.86a1 1 0 0 0 0-1.7l-11-6.86A1 1 0 0 0 8 5.14z"/></svg>`,
+    pause: `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.2"/><rect x="14" y="5" width="4" height="14" rx="1.2"/></svg>`,
+    stop: `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>`,
+  };
+  const el = h(
+    "button",
+    { class: "w-btn primary w-play", type: "button", "aria-label": off },
+    h(
+      "span",
+      { class: "w-play-ic", "aria-hidden": "true" },
+      h("span", { class: "w-play-a", html: icons.play }),
+      h("span", { class: "w-play-b", html: icons[onIcon] }),
+    ),
+    h(
+      "span",
+      { class: "w-play-lb", "aria-hidden": "true" },
+      h("span", { class: "w-play-a" }, off),
+      h("span", { class: "w-play-b" }, on),
+    ),
+  );
+  const set = (v) => {
+    el.dataset.on = v ? "1" : "";
+    el.setAttribute("aria-label", v ? on : off);
+  };
+  return { el, set };
+};
 
 reg({
   id: "pomodoro",
@@ -4081,34 +5563,43 @@ reg({
       running = false,
       iv = null;
     const durations = { focus: 25 * 60, break: 5 * 60 };
-    const digits = odometer("w-pomo-digits");
-    const disp = h("div", { class: "w-pomo-disp" }, digits.el);
+    const digits = odometer("w-pomo-digits", -1, 2);
     const modeLabel = h("span", { class: "w-pomo-chip" });
-    const fill = h("i", { class: "w-pomo-fill" });
-    const bar = h("div", { class: "w-pomo-bar", "aria-hidden": "true" }, fill);
-    const hero = h(
+    const ring = h("div", {
+      class: "w-pomo-ring",
+      "aria-hidden": "true",
+      html: `<svg viewBox="0 0 120 120"><circle class="w-pomo-track" cx="60" cy="60" r="54" pathLength="100"/><circle class="w-pomo-arc" cx="60" cy="60" r="54" pathLength="100"/></svg>`,
+    });
+    const arc = ring.querySelector(".w-pomo-arc");
+    const disp = h(
       "div",
-      { class: "w-pomo-hero" },
-      disp,
-      bar,
-      h("div", { class: "w-pomo-meta" }, modeLabel),
+      { class: "w-pomo-disp" },
+      ring,
+      h("div", { class: "w-pomo-core" }, digits.el, modeLabel),
     );
+    const hero = h("div", { class: "w-pomo-hero" }, disp);
     const fmt = (s) =>
       `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
     const upd = () => {
       digits.set(fmt(remaining));
-      modeLabel.textContent = mode === "focus" ? "focus time" : "break time";
-      modeLabel.dataset.mode = mode;
-      fill.dataset.mode = mode;
-      fill.style.scale = `${Math.max(0, 1 - remaining / durations[mode])} 1`;
+      const fresh = mode === "focus" && remaining === durations.focus;
+      modeLabel.textContent = running || fresh ? mode : `${mode}, paused`;
+      disp.dataset.mode = mode;
+      resetBtn.disabled = fresh && !running;
+      const idle = fresh ? "start" : "resume";
+      start.el.querySelector(".w-play-lb .w-play-a").textContent = idle;
+      if (!running) start.el.setAttribute("aria-label", idle);
+      const done = Math.max(0, 1 - remaining / durations[mode]);
+      arc.style.strokeDashoffset = `${100 - done * 100}`;
+      arc.style.opacity = done > 0 ? "1" : "0";
     };
     const snap = () => {
-      fill.style.transition = "none";
+      arc.style.transition = "none";
       upd();
-      void fill.offsetWidth;
-      fill.style.transition = "";
+      void arc.getBoundingClientRect();
+      arc.style.transition = "";
     };
-    const startBtn = h("button", { class: "w-btn primary" }, "start");
+    const start = playToggle("start", "pause");
     const tick = () => {
       if (!disp.isConnected) return clearInterval(iv);
       remaining--;
@@ -4131,21 +5622,25 @@ reg({
       }
       upd();
     };
-    startBtn.onclick = () => {
+    start.el.onclick = () => {
       running = !running;
-      startBtn.textContent = running ? "pause" : "start";
+      start.set(running);
+      disp.classList.toggle("running", running);
       if (running) iv = setInterval(tick, 1000);
       else clearInterval(iv);
+      upd();
     };
     const resetBtn = h("button", {
       class: "w-btn",
+      type: "button",
       html: "reset",
       onclick: () => {
         clearInterval(iv);
         running = false;
         mode = "focus";
         remaining = durations.focus;
-        startBtn.textContent = "start";
+        start.set(false);
+        disp.classList.remove("running");
         snap();
       },
     });
@@ -4154,7 +5649,7 @@ reg({
       "pomodoro",
       "25 min focus / 5 min break",
       hero,
-      h("div", { class: "w-btn-row" }, startBtn, resetBtn),
+      h("div", { class: "w-btn-row w-pomo-btns" }, start.el, resetBtn),
     );
   },
 });
@@ -4166,7 +5661,7 @@ reg({
   build: () => {
     const target = new Date(new Date().getFullYear() + 1, 0, 1);
     const cells = ["days", "hours", "minutes", "seconds"].map((unit) => {
-      const od = odometer("w-nyc-num");
+      const od = odometer("w-nyc-num", -1, unit === "seconds" ? 2 : 0);
       return {
         od,
         el: h(
@@ -4178,10 +5673,23 @@ reg({
       };
     });
     const disp = h("div", { class: "w-nyc-grid" }, ...cells.map((c) => c.el));
+    const yearStart = new Date(target.getFullYear() - 1, 0, 1);
+    const fill = h("i", { class: "w-nyc-fill" });
+    const pct = h("span", { class: "w-nyc-pct" });
+    const year = h(
+      "div",
+      { class: "w-nyc-year" },
+      h("div", { class: "w-nyc-bar", "aria-hidden": "true" }, fill),
+      pct,
+    );
     const pad = (n) => String(n).padStart(2, "0");
     let iv = null;
     const tick = () => {
       if (iv && !disp.isConnected) return clearInterval(iv);
+      const done = Math.min(1, (Date.now() - yearStart) / (target - yearStart));
+      fill.style.scale = `${done} 1`;
+      const label = `${(done * 100).toFixed(1)}% of ${yearStart.getFullYear()} done`;
+      if (pct.textContent !== label) pct.textContent = label;
       let s = Math.max(0, Math.floor((target - Date.now()) / 1000));
       const d = Math.floor(s / 86400);
       s %= 86400;
@@ -4200,11 +5708,10 @@ reg({
       `countdown to ${target.getFullYear()}`,
       "midnight on 1 january, your local time",
       disp,
+      year,
     );
   },
 });
-
-////// productivity / focus //////////////////////////////////////////////////
 
 reg({
   id: "breathing",
@@ -4212,68 +5719,96 @@ reg({
     /^(?:breathing(?:\s+exercise)?|box\s+breathing|breathe)$/i.test(q.trim()),
   build: () => {
     const phases = [
-      ["breathe in", 4000],
-      ["hold", 4000],
-      ["breathe out", 4000],
-      ["hold", 4000],
+      ["breathe in", "in"],
+      ["hold", "full"],
+      ["breathe out", "out"],
+      ["hold", "empty"],
     ];
-    const circle = h("div", {
-      class: "w-breath-circle",
-      "aria-hidden": "true",
-    });
+    const secs = 4;
+    const circle = h("div", { class: "w-breath-circle" });
+    const count = h("span", { class: "w-breath-count" });
+    const stage = h(
+      "div",
+      { class: "w-breath-stage", "aria-hidden": "true" },
+      h("div", { class: "w-breath-guide" }),
+      circle,
+      count,
+    );
     const label = h(
       "div",
       { class: "w-breath-label", role: "status" },
-      "press start",
+      "ready",
+    );
+    const dots = h(
+      "div",
+      { class: "w-breath-steps", "aria-hidden": "true" },
+      ...phases.map(() => h("i")),
     );
     let i = 0,
+      n = 0,
       to = null,
       running = false;
     const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const soft = (el, dist) => {
+      if (calm()) return;
+      el.animate(
+        [
+          {
+            opacity: 0,
+            filter: "blur(4px)",
+            transform: `translateY(${dist}px)`,
+          },
+          { opacity: 1, filter: "blur(0)", transform: "none" },
+        ],
+        { duration: 360, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
+      );
+    };
     const say = (text) => {
       if (label.textContent === text) return;
       label.textContent = text;
-      if (calm()) return;
-      label.animate(
-        [
-          { opacity: 0, filter: "blur(4px)", transform: "translateY(4px)" },
-          { opacity: 1, filter: "blur(0)", transform: "none" },
-        ],
-        { duration: 320, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
-      );
+      soft(label, 4);
     };
     const step = () => {
       if (!circle.isConnected) return clearTimeout(to);
-      const [text, dur] = phases[i % phases.length];
-      say(text);
-      circle.style.transitionDuration = `${dur}ms`;
-      circle.dataset.phase = i % 4 === 0 ? "in" : i % 4 === 2 ? "out" : "hold";
-      circle.classList.toggle(
-        "big",
-        text === "breathe in" || (text === "hold" && i % 4 === 1),
-      );
-      i++;
-      to = setTimeout(step, dur);
+      const at = i % phases.length;
+      if (n === 0) {
+        const [text, phase] = phases[at];
+        say(text);
+        stage.dataset.phase = phase;
+        [...dots.children].forEach((d, k) => {
+          d.classList.toggle("on", k === at);
+        });
+      }
+      count.textContent = secs - n;
+      n++;
+      if (n === secs) {
+        n = 0;
+        i++;
+      }
+      to = setTimeout(step, 1000);
     };
-    const btn = h("button", { class: "w-btn primary" }, "start");
-    btn.onclick = () => {
+    const btn = playToggle("start", "stop", "stop");
+    btn.el.onclick = () => {
       running = !running;
-      btn.textContent = running ? "stop" : "start";
+      btn.set(running);
+      stage.classList.toggle("running", running);
+      clearTimeout(to);
       if (running) {
         i = 0;
+        n = 0;
         step();
-      } else {
-        clearTimeout(to);
-        circle.classList.remove("big");
-        delete circle.dataset.phase;
-        say("press start");
+        return;
       }
+      delete stage.dataset.phase;
+      count.textContent = "";
+      for (const d of dots.children) d.classList.remove("on");
+      say("ready");
     };
     return card(
       "box breathing",
       "4-4-4-4 to calm down",
-      h("div", { class: "w-breath-wrap" }, circle, label),
-      h("div", { class: "w-btn-row" }, btn),
+      h("div", { class: "w-breath-wrap" }, stage, label, dots),
+      h("div", { class: "w-btn-row w-breath-btns" }, btn.el),
     );
   },
 });
@@ -4286,49 +5821,63 @@ reg({
     ),
   build: () => {
     const ta = h("textarea", {
-      class: "w-textarea",
+      class: "w-textarea w-wc-in",
       rows: "5",
-      placeholder: "type or paste text…",
+      placeholder: "type or paste text",
+      "aria-label": "text to count",
     });
     const big = h("span", { class: "w-wc-num" }, "0");
     const unit = h("span", { class: "w-wc-unit" }, "words");
-    const hero = h("div", { class: "w-wc-hero" }, big, unit);
-    const out = h("div", { class: "w-wc-grid" });
-    const tiles = ["characters", "lines", "sentences", "reading time"].map(
-      (l) => {
-        const v = h("span", { class: "w-wc-tile-val" }, "0");
-        out.append(
-          h(
-            "div",
-            { class: "w-wc-tile" },
-            h("span", { class: "w-wc-tile-key" }, l),
-            v,
-          ),
-        );
-        return v;
-      },
+    const stats = ["characters", "sentences", "lines", "reading time"].map(
+      (label) => ({
+        val: h("dd", { class: "w-wc-val" }, "0"),
+        key: h("dt", { class: "w-wc-key" }, label),
+      }),
     );
+    const out = h(
+      "div",
+      { class: "w-wc-out empty" },
+      h("div", { class: "w-wc-hero" }, big, unit),
+      h(
+        "dl",
+        { class: "w-wc-stats" },
+        stats.map(({ val, key }) => h("div", { class: "w-wc-stat" }, key, val)),
+      ),
+    );
+    const sentencer = Intl.Segmenter
+      ? new Intl.Segmenter(undefined, { granularity: "sentence" })
+      : null;
     const run = () => {
       const t = ta.value;
       const words = (t.match(/\S+/g) || []).length;
-      const lines = t ? t.split("\n").length : 0;
+      const sentences = sentencer
+        ? [...sentencer.segment(t)].filter((x) =>
+            /\p{L}|\p{N}/u.test(x.segment),
+          ).length
+        : (t.match(/[^.!?]+[.!?]*/g) || []).filter((x) => /\S/.test(x)).length;
+      const secs = Math.round((words / 238) * 60);
+      const vals = [
+        [...t].length,
+        sentences,
+        t ? t.split("\n").length : 0,
+        !words
+          ? "0 sec"
+          : secs < 60
+            ? `${Math.max(1, secs)} sec`
+            : `${Math.round(secs / 60)} min`,
+      ];
       big.textContent = words.toLocaleString();
       unit.textContent = words === 1 ? "word" : "words";
-      hero.classList.toggle("empty", !t);
       out.classList.toggle("empty", !t);
-      const vals = [
-        t.length.toLocaleString(),
-        lines.toLocaleString(),
-        String((t.match(/[.!?]+/g) || []).length),
-        `${Math.ceil(words / 200)} min`,
-      ];
-      tiles.forEach((el, i) => {
-        if (el.textContent !== vals[i]) el.textContent = vals[i];
+      stats.forEach(({ val }, i) => {
+        const v =
+          typeof vals[i] === "number" ? vals[i].toLocaleString() : vals[i];
+        if (val.textContent !== v) val.textContent = v;
       });
     };
     ta.oninput = run;
     run();
-    return card("word counter", null, hero, ta, out);
+    return card("word counter", null, ta, out);
   },
 });
 
@@ -4340,46 +5889,71 @@ reg({
     ),
   build: () => {
     let taps = [];
-    const out = h("div", { class: "w-big w-tap-out" }, "waiting for taps");
+    const num = h("span", { class: "w-tap-num" }, "tap");
+    const unit = h("span", { class: "w-tap-unit" }, "bpm");
+    const hint = h("span", { class: "w-tap-hint" });
+    const live = h("span", { class: "w-sr", role: "status" });
     const pad = h(
       "button",
-      { class: "w-tap-pad", type: "button" },
-      h("span", { class: "w-tap-pad-label" }, "tap"),
+      {
+        class: "w-tap-pad",
+        type: "button",
+        "aria-label": "tap to the beat",
+      },
+      h(
+        "span",
+        { class: "w-tap-out", "aria-hidden": "true" },
+        h("span", { class: "w-tap-read" }, num, unit),
+        hint,
+      ),
     );
-    pad.onclick = () => {
+    const reset = h("button", {
+      class: "w-btn",
+      type: "button",
+      html: "reset",
+      disabled: "",
+    });
+    const show = (bpm, text) => {
+      pad.dataset.live = bpm == null ? "" : "1";
+      num.textContent = bpm == null ? "tap" : bpm;
+      hint.textContent = text;
+      live.textContent = bpm == null ? "" : `${bpm} bpm`;
+      reset.disabled = !taps.length;
+    };
+    show(null, "the tempo shows after two taps");
+    const tap = () => {
       const now = performance.now();
       taps = taps.filter((t) => now - t < 3000);
       taps.push(now);
       if (taps.length >= 2) {
         const intervals = taps.slice(1).map((t, i) => t - taps[i]);
         const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-        out.textContent = `${Math.round(60000 / avg)} bpm`;
-      }
+        show(Math.round(60000 / avg), `averaged over ${taps.length} taps`);
+      } else show(null, "keep tapping");
+      pad.classList.remove("hit");
+      void pad.offsetWidth;
       pad.classList.add("hit");
-      requestAnimationFrame(() => pad.classList.remove("hit"));
+    };
+    pad.onpointerdown = (e) => {
+      if (!e.button) tap();
+    };
+    pad.onclick = (e) => {
+      if (e.detail === 0) tap();
+    };
+    reset.onclick = () => {
+      taps = [];
+      show(null, "the tempo shows after two taps");
+      pad.focus();
     };
     return card(
       "bpm tapper",
-      "tap the pad to the beat",
-      h("div", { class: "w-tap-stage" }, out),
+      "tap the pad in time with the beat",
       pad,
-      h(
-        "div",
-        { class: "w-btn-row" },
-        h("button", {
-          class: "w-btn",
-          html: "reset",
-          onclick: () => {
-            taps = [];
-            out.textContent = "waiting for taps";
-          },
-        }),
-      ),
+      live,
+      h("div", { class: "w-btn-row w-tap-btns" }, reset),
     );
   },
 });
-
-////// audio / music /////////////////////////////////////////////////////////
 
 reg({
   id: "metronome",
@@ -4389,8 +5963,23 @@ reg({
       beats = 4,
       running = false,
       iv = null,
-      beat = 0;
+      due = 0,
+      beat = 0,
+      side = 1;
+    const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
     const dots = h("div", { class: "w-metro-dots" });
+    const arm = h(
+      "div",
+      { class: "w-metro-arm" },
+      h("span", { class: "w-metro-bob" }),
+    );
+    const pend = h(
+      "div",
+      { class: "w-metro-pend", "aria-hidden": "true" },
+      h("div", { class: "w-metro-arc" }),
+      arm,
+      h("span", { class: "w-metro-pivot" }),
+    );
     const renderDots = () =>
       dots.replaceChildren(
         ...Array.from({ length: beats }, (_, i) =>
@@ -4411,72 +6000,85 @@ reg({
       o.start();
       o.stop(audio().currentTime + 0.05);
     };
+    const swing = (deg, ms, easing) => {
+      arm.style.transition = `rotate ${ms}ms ${easing}`;
+      arm.style.rotate = `${deg}deg`;
+    };
     const tick = () => {
       if (!dots.isConnected) {
-        clearInterval(iv);
-        iv = null;
         running = false;
         return;
       }
       [...dots.children].forEach((d, i) => {
         d.classList.toggle("on", i === beat);
+        if (i !== beat || calm()) return;
+        d.animate([{ scale: 1.2 }, { scale: 1 }], {
+          duration: Math.min(240, 60000 / bpm),
+          easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+        });
       });
       click(beat === 0);
+      if (!calm()) {
+        side = -side;
+        swing(side * 26, 60000 / bpm, "cubic-bezier(0.37, 0, 0.63, 1)");
+      }
       beat = (beat + 1) % beats;
+      due += 60000 / bpm;
+      iv = setTimeout(tick, Math.max(0, due - performance.now()));
     };
-    const bpmVal = h("span", { class: "w-range-val" }, bpm);
-    const bpmIn = h("input", {
-      class: "w-range",
-      type: "range",
+    const tempoNum = h("span", { class: "w-metro-num" }, bpm);
+    const tempoName = h("span", { class: "w-metro-name" });
+    const nameFor = (v) =>
+      v < 60
+        ? "largo"
+        : v < 76
+          ? "adagio"
+          : v < 108
+            ? "andante"
+            : v < 120
+              ? "moderato"
+              : v < 168
+                ? "allegro"
+                : "presto";
+    tempoName.textContent = nameFor(bpm);
+    const bpmIn = slider({
       min: "40",
       max: "240",
       value: bpm,
+      "aria-label": "tempo in beats per minute",
     });
-    const startBtn = h("button", { class: "w-btn primary" }, "start");
-    const restart = () => {
-      if (running) {
-        clearInterval(iv);
-        beat = 0;
-        iv = setInterval(tick, 60000 / bpm);
-      }
-    };
+    const start = playToggle("start", "stop", "stop");
     bpmIn.oninput = () => {
       bpm = +bpmIn.value;
-      bpmVal.textContent = bpm;
-      restart();
+      tempoNum.textContent = bpm;
+      tempoName.textContent = nameFor(bpm);
     };
-    startBtn.onclick = () => {
+    start.el.onclick = () => {
       running = !running;
-      startBtn.textContent = running ? "stop" : "start";
-      startBtn.classList.toggle("active", running);
+      start.set(running);
       dots.classList.toggle("running", running);
+      pend.classList.toggle("running", running);
+      clearTimeout(iv);
       if (running) {
         beat = 0;
+        side = 1;
+        due = performance.now();
         tick();
-        iv = setInterval(tick, 60000 / bpm);
-      } else {
-        clearInterval(iv);
-        [...dots.children].forEach((d) => {
-          d.classList.remove("on");
-        });
+        return;
       }
+      swing(0, 420, "cubic-bezier(0.23, 1, 0.32, 1)");
+      for (const d of dots.children) d.classList.remove("on");
     };
-    const beatsSel = h(
-      "select",
-      { class: "w-select" },
-      ...[2, 3, 4, 6].map((n) =>
-        h(
-          "option",
-          { value: n, ...(n === 4 ? { selected: "" } : {}) },
-          `${n}/4`,
-        ),
-      ),
+    const beatsSeg = segmented(
+      "beats per bar",
+      ["2", "3", "4", "6"],
+      "4",
+      (v) => {
+        beats = +v;
+        beat = 0;
+        renderDots();
+      },
     );
-    beatsSel.onchange = () => {
-      beats = +beatsSel.value;
-      beat = 0;
-      renderDots();
-    };
     renderDots();
     return card(
       "metronome",
@@ -4484,25 +6086,55 @@ reg({
       h(
         "div",
         { class: "w-metro-stage" },
+        pend,
+        h(
+          "div",
+          { class: "w-metro-tempo" },
+          tempoNum,
+          h("span", { class: "w-metro-unit" }, "bpm"),
+          tempoName,
+        ),
         dots,
-        h("div", { class: "w-metro-tempo" }, bpmVal, h("span", null, "bpm")),
       ),
-      h("label", { class: "w-label" }, "tempo", bpmIn),
-      h(
-        "div",
-        { class: "w-row" },
-        h("label", { class: "w-label" }, "time sig", beatsSel),
-      ),
-      h("div", { class: "w-btn-row" }, startBtn),
+      sliderField("tempo", bpmIn),
+      h("div", { class: "w-label col" }, "beats per bar", beatsSeg),
+      h("div", { class: "w-btn-row" }, start.el),
     );
   },
 });
 
 const WAVE_PATHS = {
-  sine: "M0 20C10 6 20 6 30 20C40 34 50 34 60 20C70 6 80 6 90 20C100 34 110 34 120 20",
-  square: "M0 20V8h30v24h30V8h30v24h30V20",
-  sawtooth: "M0 32L60 8V32L120 8",
-  triangle: "M0 20L15 8L45 32L75 8L105 32L120 26",
+  sine: ["M0 20", "c10 -14 20 -14 30 0c10 14 20 14 30 0"],
+  square: ["M0 32", "v-24h30v24h30"],
+  sawtooth: ["M0 32", "l60 -24v24"],
+  triangle: ["M0 20", "l15 -12l30 24l15 -12"],
+};
+
+const NOTE_NAMES = [
+  "C",
+  "C#",
+  "D",
+  "D#",
+  "E",
+  "F",
+  "F#",
+  "G",
+  "G#",
+  "A",
+  "A#",
+  "B",
+];
+
+const mkPlayBtn = (onclick) => {
+  const { el } = playToggle("play", "stop", "stop");
+  el.onclick = onclick;
+  return el;
+};
+
+const setPlaying = (btn, on) => {
+  btn.dataset.on = on ? "1" : "";
+  btn.classList.toggle("active", on);
+  btn.setAttribute("aria-label", on ? "stop" : "play");
 };
 
 reg({
@@ -4516,90 +6148,170 @@ reg({
     if (m) return { freq: +m[1] };
     return null;
   },
-  build: ({ freq }) => {
-    let osc = null,
-      gain = null;
-    const freqVal = h("span", { class: "w-range-val" }, freq);
-    const freqIn = h("input", {
-      class: "w-range",
-      type: "range",
-      min: "20",
-      max: "4000",
-      value: freq,
+  build: ({ freq: initial }) => {
+    const LO = 20;
+    const HI = 20000;
+    const clampF = (f) => Math.min(HI, Math.max(LO, f));
+    const levelFor = (w) => (w === "sine" || w === "triangle" ? 0.15 : 0.07);
+    const toPos = (f) =>
+      Math.round((Math.log(f / LO) / Math.log(HI / LO)) * 1000);
+    const fmt = (f) =>
+      f < 100 ? f.toFixed(1).replace(/\.0$/, "") : `${Math.round(f)}`;
+    let freq = clampF(initial),
+      osc = null,
+      gain = null,
+      wave = "sine",
+      raf = 0,
+      last = 0,
+      phase = 0;
+    const num = h("input", {
+      class: "w-tone-num",
+      type: "text",
+      inputmode: "decimal",
+      autocomplete: "off",
+      spellcheck: "false",
+      "aria-label": "frequency in hertz",
+      value: fmt(freq),
     });
-    const wave = h(
-      "select",
-      { class: "w-select" },
-      ...["sine", "square", "sawtooth", "triangle"].map((w) =>
-        h("option", { value: w }, w),
-      ),
-    );
-    const scope = h("div", { class: "w-tone-scope" });
-    const drawScope = () => {
-      scope.innerHTML = `<svg viewBox="0 0 120 40" preserveAspectRatio="none" aria-hidden="true"><path d="${WAVE_PATHS[wave.value]}"/></svg>`;
+    const note = h("span", { class: "w-tone-note", "aria-live": "polite" });
+    const freqIn = slider({
+      min: "0",
+      max: "1000",
+      value: toPos(freq),
+    });
+    const scope = h("div", {
+      class: "w-tone-scope",
+      html: `<svg viewBox="0 0 120 40" preserveAspectRatio="none" aria-hidden="true"><g class="w-tone-amp"><path/></g></svg>`,
+    });
+    const path = scope.querySelector("path");
+    const place = () => {
+      const sx = 2 / (1 + Math.log2(freq / 20) * 0.75);
+      path.setAttribute(
+        "transform",
+        `scale(${sx.toFixed(4)} 1) translate(${(-(phase % 60)).toFixed(2)} 0)`,
+      );
     };
-    drawScope();
+    const shapeWave = () => {
+      const [start, cycle] = WAVE_PATHS[wave];
+      path.setAttribute("d", `${start}${cycle.repeat(10)}`);
+    };
+    const sizeNum = () => {
+      num.style.width = `${Math.max(2, num.value.length) + 0.25}ch`;
+    };
+    const apply = (f, from) => {
+      freq = clampF(f);
+      if (from !== "num") {
+        num.value = fmt(freq);
+        sizeNum();
+      }
+      if (from !== "range") {
+        freqIn.value = toPos(freq);
+        freqIn.style.setProperty("--p", freqIn.value / 1000);
+      }
+      const midi = 69 + 12 * Math.log2(freq / 440);
+      const near = Math.round(midi);
+      const cents = Math.round((midi - near) * 100);
+      note.textContent = `${NOTE_NAMES[near % 12]}${Math.floor(near / 12) - 1}${cents ? `, ${Math.abs(cents)} cents ${cents > 0 ? "sharp" : "flat"}` : ""}`;
+      place();
+      osc?.frequency.setTargetAtTime(freq, audio().currentTime, 0.01);
+    };
+    shapeWave();
+    apply(freq);
+    const loop = (now) => {
+      if (!osc || !scope.isConnected) {
+        raf = 0;
+        return;
+      }
+      phase += (now - (last || now)) * 0.06;
+      last = now;
+      place();
+      raf = requestAnimationFrame(loop);
+    };
     const display = h(
       "div",
       { class: "w-tone-display" },
       h(
         "div",
         { class: "w-tone-read" },
-        freqVal,
-        h("span", { class: "w-tone-unit" }, "hz"),
+        h(
+          "label",
+          { class: "w-tone-field" },
+          num,
+          h("span", { class: "w-tone-unit" }, "Hz"),
+        ),
+        note,
       ),
       scope,
     );
-    const btn = h("button", { class: "w-btn primary" }, "play");
     const stop = () => {
-      if (osc) {
-        gain.gain.exponentialRampToValueAtTime(
-          0.0001,
-          audio().currentTime + 0.05,
-        );
-        osc.stop(audio().currentTime + 0.06);
-        osc = null;
-      }
+      if (!osc) return;
+      const t = audio().currentTime;
+      gain.gain.cancelScheduledValues(t);
+      gain.gain.setTargetAtTime(0.0001, t, 0.02);
+      osc.stop(t + 0.15);
+      osc = null;
+      cancelAnimationFrame(raf);
+      raf = 0;
     };
-    btn.onclick = () => {
+    const btn = mkPlayBtn(() => {
       if (osc) {
         stop();
-        btn.textContent = "play";
-        btn.classList.remove("active");
+        setPlaying(btn, false);
         display.classList.remove("live");
         return;
       }
       const ac = audio();
+      const t = ac.currentTime;
       osc = ac.createOscillator();
       gain = ac.createGain();
-      osc.type = wave.value;
-      osc.frequency.value = +freqIn.value;
-      gain.gain.value = 0.15;
+      osc.type = wave;
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.setTargetAtTime(levelFor(wave), t, 0.015);
       osc.connect(gain);
       gain.connect(ac.destination);
-      osc.start();
-      btn.textContent = "stop";
-      btn.classList.add("active");
+      osc.start(t);
+      setPlaying(btn, true);
       display.classList.add("live");
+      if (calmMotion()) return;
+      last = 0;
+      raf = requestAnimationFrame(loop);
+    });
+    freqIn.oninput = () =>
+      apply(LO * (HI / LO) ** (freqIn.value / 1000), "range");
+    num.oninput = () => {
+      sizeNum();
+      const f = Number.parseFloat(num.value.replace(",", "."));
+      const bad = Number.isNaN(f) || f < LO || f > HI;
+      num.setAttribute("aria-invalid", bad);
+      if (!bad) apply(f, "num");
     };
-    freqIn.oninput = () => {
-      freqVal.textContent = freqIn.value;
-      if (osc) osc.frequency.value = +freqIn.value;
+    num.onblur = () => {
+      num.removeAttribute("aria-invalid");
+      num.value = fmt(freq);
+      sizeNum();
     };
-    wave.onchange = () => {
-      drawScope();
-      if (osc) osc.type = wave.value;
+    num.onkeydown = (e) => {
+      if (e.key === "Enter") return num.blur();
+      const dir = { ArrowUp: 1, ArrowDown: -1 }[e.key];
+      if (!dir) return;
+      e.preventDefault();
+      apply(Math.round(freq) + dir * (e.shiftKey ? 10 : 1));
     };
+    const waves = segmented("waveform", Object.keys(WAVE_PATHS), wave, (w) => {
+      wave = w;
+      shapeWave();
+      place();
+      if (!osc) return;
+      osc.type = w;
+      gain.gain.setTargetAtTime(levelFor(w), audio().currentTime, 0.01);
+    });
     return card(
       "tone generator",
       "check your volume before playing",
       display,
-      h("label", { class: "w-label" }, "frequency", freqIn),
-      h(
-        "div",
-        { class: "w-row" },
-        h("label", { class: "w-label" }, "waveform", wave),
-      ),
+      sliderField("frequency", freqIn),
+      h("div", { class: "w-label col" }, "waveform", waves),
       h("div", { class: "w-btn-row" }, btn),
     );
   },
@@ -4612,7 +6324,7 @@ reg({
       q.trim(),
     ),
   build: (_, q) => {
-    const kind = (q.match(/white|pink|brown/i) || ["white"])[0].toLowerCase();
+    let kind = (q.match(/white|pink|brown/i) || ["white"])[0].toLowerCase();
     let src = null,
       gain = null;
     const makeNoise = () => {
@@ -4637,66 +6349,108 @@ reg({
       s.loop = true;
       return s;
     };
-    const volVal = h("span", { class: "w-range-val" }, "30");
-    const vol = h("input", {
-      class: "w-range",
-      type: "range",
+    const volVal = h("span", null, "30");
+    const vol = slider({
       min: "0",
       max: "100",
       value: "30",
     });
-    const tilt = (t) =>
-      kind === "white" ? 1 : kind === "pink" ? 1 - t * 0.55 : (1 - t) ** 2.2;
-    const bars = Array.from({ length: 40 }, (_, i) => {
-      const t = i / 39;
-      const hgt = Math.max(
-        0.06,
-        Math.min(1, tilt(t) * (0.55 + Math.random() * 0.45)),
+    const level = () => (vol.value / 100) * 0.5;
+    const seeds = Array.from({ length: 40 }, () => 0.55 + Math.random() * 0.45);
+    const bars = seeds.map((_, i) => {
+      const b = h("span", { class: "w-noise-bar" });
+      b.style.setProperty("--i", i);
+      b.style.setProperty(
+        "--d",
+        `${(0.22 + Math.random() * 0.36).toFixed(2)}s`,
       );
-      return `<rect x="${(i * 5).toFixed(1)}" y="${(60 - hgt * 60).toFixed(1)}" width="3.6" height="${(hgt * 60).toFixed(1)}" rx="1.6" opacity="${(0.35 + hgt * 0.65).toFixed(2)}"/>`;
-    }).join("");
-    const display = h("div", {
-      class: `w-noise-viz ${kind}`,
-      html: `<svg viewBox="0 0 200 60" preserveAspectRatio="none" aria-hidden="true">${bars}</svg>`,
+      b.style.setProperty("--delay", `${(-Math.random()).toFixed(2)}s`);
+      return b;
     });
-    const btn = h("button", { class: "w-btn primary" }, "play");
-    btn.onclick = () => {
-      if (src) {
-        src.stop();
-        src = null;
-        btn.textContent = "play";
-        btn.classList.remove("active");
-        display.classList.remove("live");
-        return;
-      }
+    const shape = () => {
+      bars.forEach((b, i) => {
+        const t = i / 39;
+        const tilt =
+          kind === "white"
+            ? 1
+            : kind === "pink"
+              ? 1 - t * 0.55
+              : (1 - t) ** 2.2;
+        b.style.setProperty(
+          "--h",
+          Math.max(0.06, Math.min(1, tilt * seeds[i])).toFixed(3),
+        );
+      });
+    };
+    shape();
+    const display = h(
+      "div",
+      { class: `w-noise-viz ${kind}` },
+      h("div", { class: "w-noise-bars", "aria-hidden": "true" }, bars),
+    );
+    display.style.setProperty("--vol", vol.value / 100);
+    const start = () => {
       const ac = audio();
+      const t = ac.currentTime;
       src = makeNoise();
       gain = ac.createGain();
-      gain.gain.value = (vol.value / 100) * 0.5;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.setTargetAtTime(level(), t, 0.03);
       src.connect(gain);
       gain.connect(ac.destination);
-      src.start();
-      btn.textContent = "stop";
-      btn.classList.add("active");
-      display.classList.add("live");
+      src.start(t);
     };
+    const stop = () => {
+      if (!src) return;
+      const t = audio().currentTime;
+      gain.gain.cancelScheduledValues(t);
+      gain.gain.setTargetAtTime(0.0001, t, 0.03);
+      src.stop(t + 0.2);
+      src = null;
+      gain = null;
+    };
+    const btn = mkPlayBtn(() => {
+      const on = !src;
+      if (on) start();
+      else stop();
+      setPlaying(btn, on);
+      display.classList.toggle("live", on);
+    });
+    const blurb = {
+      white: "even hiss across every frequency, like tv static",
+      pink: "softer highs, like steady rain",
+      brown: "deep rumble, like a distant waterfall",
+    };
+    const kinds = segmented(
+      "noise color",
+      ["white", "pink", "brown"],
+      kind,
+      (k) => {
+        display.classList.remove(kind);
+        kind = k;
+        display.classList.add(k);
+        shape();
+        el.querySelector(".w-title").textContent = `${k} noise`;
+        el.querySelector(".w-sub").textContent = blurb[k];
+        if (!src) return;
+        stop();
+        start();
+      },
+    );
     vol.oninput = () => {
       volVal.textContent = vol.value;
-      if (gain) gain.gain.value = (vol.value / 100) * 0.5;
+      display.style.setProperty("--vol", vol.value / 100);
+      gain?.gain.setTargetAtTime(level(), audio().currentTime, 0.02);
     };
-    return card(
+    const el = card(
       `${kind} noise`,
-      "for focus or sleep",
+      blurb[kind],
       display,
-      h(
-        "label",
-        { class: "w-label" },
-        "volume",
-        vol,
-        h("span", { class: "w-noise-vol" }, volVal, "%"),
-      ),
+      h("div", { class: "w-label col" }, "color", kinds),
+      sliderField("volume", vol, volVal, "%"),
       h("div", { class: "w-btn-row" }, btn),
     );
+    return el;
   },
 });
 
@@ -4705,22 +6459,13 @@ reg({
   match: (q) =>
     /^(?:piano|keyboard\s+piano|virtual\s+piano|play\s+piano)$/i.test(q.trim()),
   build: () => {
-    const whites = [
-      ["C", 60],
-      ["D", 62],
-      ["E", 64],
-      ["F", 65],
-      ["G", 67],
-      ["A", 69],
-      ["B", 71],
-      ["C", 72],
-    ];
+    const whites = [60, 62, 64, 65, 67, 69, 71, 72];
     const blacks = [
-      ["C#", 61, 0.65],
-      ["D#", 63, 1.75],
-      ["F#", 66, 3.6],
-      ["G#", 68, 4.7],
-      ["A#", 70, 5.8],
+      [61, 0.65],
+      [63, 1.75],
+      [66, 3.6],
+      [68, 4.7],
+      [70, 5.8],
     ];
     const qwerty = {
       a: 60,
@@ -4740,60 +6485,173 @@ reg({
     const letterFor = Object.fromEntries(
       Object.entries(qwerty).map(([k, m]) => [m, k]),
     );
+    const noteName = (m) => `${NOTE_NAMES[m % 12]}${Math.floor(m / 12) - 1}`;
+    let oct = 0;
     const bed = h("div", { class: "w-piano-bed" });
     const wrap = h("div", { class: "w-piano" }, bed);
     const elByMidi = {};
-    const play = (midi) => {
+    const held = new Map();
+    const byPointer = new Set();
+    let dragging = false;
+    const press = (key) => {
+      if (held.has(key)) return;
       const ac = audio();
+      const t = ac.currentTime;
       const o = ac.createOscillator(),
+        f = ac.createBiquadFilter(),
         g = ac.createGain();
       o.type = "triangle";
-      o.frequency.value = noteFreq(midi);
-      g.gain.setValueAtTime(0.001, ac.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.3, ac.currentTime + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 1.2);
-      o.connect(g);
+      o.frequency.value = noteFreq(key + oct * 12);
+      f.type = "lowpass";
+      f.frequency.setValueAtTime(4000, t);
+      f.frequency.setTargetAtTime(1200, t, 0.5);
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.exponentialRampToValueAtTime(0.32, t + 0.008);
+      g.gain.setTargetAtTime(0.0001, t + 0.008, 1.1);
+      o.connect(f);
+      f.connect(g);
       g.connect(ac.destination);
-      o.start();
-      o.stop(ac.currentTime + 1.2);
-      const el = elByMidi[midi];
-      if (el) {
-        el.classList.add("active");
-        setTimeout(() => el.classList.remove("active"), 150);
-      }
+      o.start(t);
+      held.set(key, { o, g });
+      elByMidi[key]?.classList.add("down");
     };
-    const mkKey = (name, midi, cls, props) => {
+    const release = (key) => {
+      const note = held.get(key);
+      if (!note) return;
+      held.delete(key);
+      byPointer.delete(key);
+      const t = audio().currentTime;
+      const { gain: p } = note.g;
+      if (p.cancelAndHoldAtTime) p.cancelAndHoldAtTime(t);
+      else {
+        p.cancelScheduledValues(t);
+        p.setValueAtTime(p.value, t);
+      }
+      p.setTargetAtTime(0.0001, t, 0.12);
+      note.o.stop(t + 1);
+      elByMidi[key]?.classList.remove("down");
+    };
+    const notes = [];
+    const mkKey = (midi, cls, props) => {
+      const nm = h("span", { class: "w-key-note" });
+      notes.push([nm, midi]);
       const k = h(
         "button",
-        {
-          class: cls,
-          type: "button",
-          title: name,
-          "aria-label": `play ${name}`,
-          ...props,
-        },
-        h("span", { class: "w-key-cap" }, letterFor[midi] || ""),
+        { class: cls, type: "button", ...props },
+        nm,
+        h("span", { class: "w-key-cap" }, letterFor[midi]),
       );
-      k.onpointerdown = () => play(midi);
+      k.onpointerdown = (e) => {
+        if (e.button > 0) return;
+        if (k.hasPointerCapture?.(e.pointerId))
+          k.releasePointerCapture(e.pointerId);
+        dragging = true;
+        byPointer.add(midi);
+        press(midi);
+      };
+      k.onpointerenter = () => {
+        if (!dragging) return;
+        byPointer.add(midi);
+        press(midi);
+      };
+      k.onpointerleave = () => {
+        if (byPointer.has(midi)) release(midi);
+      };
+      k.onclick = (e) => {
+        if (e.detail) return;
+        press(midi);
+        setTimeout(() => release(midi), 180);
+      };
       elByMidi[midi] = k;
       return k;
     };
-    for (const [name, midi] of whites) bed.append(mkKey(name, midi, "w-key"));
-    for (const [name, midi, at] of blacks)
+    for (const midi of whites) bed.append(mkKey(midi, "w-key"));
+    for (const [midi, at] of blacks)
       bed.append(
-        mkKey(name, midi, "w-key black", {
-          style: { left: `${at * 12.5}%` },
-        }),
+        mkKey(midi, "w-key black", { style: { left: `${at * 12.5}%` } }),
       );
-    const onKey = (e) => {
-      if (!wrap.isConnected)
-        return document.removeEventListener("keydown", onKey);
-      if (e.repeat) return;
-      const m = qwerty[e.key.toLowerCase()];
-      if (m && document.activeElement?.tagName !== "INPUT") play(m);
+    const range = h("span", { class: "w-piano-range", "aria-live": "polite" });
+    const down = h("button", {
+      class: "w-piano-step",
+      type: "button",
+      "aria-label": "octave down",
+      html: `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3.5 8h9"/></svg>`,
+    });
+    const up = h("button", {
+      class: "w-piano-step",
+      type: "button",
+      "aria-label": "octave up",
+      html: `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3.5 8h9M8 3.5v9"/></svg>`,
+    });
+    const shift = (d) => {
+      oct = Math.max(-3, Math.min(3, oct + d));
+      down.disabled = oct === -3;
+      up.disabled = oct === 3;
+      range.textContent = `${noteName(60 + oct * 12)} to ${noteName(72 + oct * 12)}`;
+      for (const [nm, midi] of notes) {
+        nm.textContent = midi % 12 ? "" : noteName(midi + oct * 12);
+        elByMidi[midi].setAttribute("aria-label", noteName(midi + oct * 12));
+      }
     };
-    document.addEventListener("keydown", onKey);
-    return card("piano", "click keys or use your keyboard (a–k)", wrap);
+    down.onclick = () => shift(-1);
+    up.onclick = () => shift(1);
+    shift(0);
+    const events = {
+      keydown: (e) => {
+        if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+        const tag = document.activeElement?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        const key = e.key.toLowerCase();
+        if (key === "z" || key === "x") return shift(key === "z" ? -1 : 1);
+        if (qwerty[key]) press(qwerty[key]);
+      },
+      keyup: (e) => {
+        const m = qwerty[e.key.toLowerCase()];
+        if (m && !byPointer.has(m)) release(m);
+      },
+      pointerup: () => {
+        dragging = false;
+        for (const m of [...byPointer]) release(m);
+      },
+      blur: () => {
+        dragging = false;
+        for (const m of [...held.keys()]) release(m);
+      },
+    };
+    events.pointercancel = events.pointerup;
+    const bind = (on) => {
+      for (const type of Object.keys(events))
+        window[on ? "addEventListener" : "removeEventListener"](type, guard);
+    };
+    const guard = (e) => {
+      if (!wrap.isConnected) return bind(false);
+      events[e.type](e);
+    };
+    bind(true);
+    return card(
+      "piano",
+      "click the keys or type a to k",
+      wrap,
+      h(
+        "div",
+        { class: "w-piano-bar" },
+        h(
+          "div",
+          { class: "w-piano-oct", role: "group", "aria-label": "octave" },
+          down,
+          range,
+          up,
+        ),
+        h(
+          "span",
+          { class: "w-piano-hint" },
+          h("kbd", null, "z"),
+          " and ",
+          h("kbd", null, "x"),
+          " shift octave",
+        ),
+      ),
+    );
   },
 });
 
@@ -4805,41 +6663,32 @@ reg({
     ),
   build: () => {
     const STEPS = 16;
-    const tracks = ["kick", "snare", "hat", "clap"];
-    const grid = tracks.map(() => Array(STEPS).fill(false));
-    let bpm = 120,
+    const tracks = ["kick", "snare", "hi-hat", "clap"];
+    const starter = [[0, 7, 8, 10], [4, 12], [0, 2, 4, 6, 8, 10, 12, 14], []];
+    const grid = starter.map((on) =>
+      Array.from({ length: STEPS }, (_, s) => on.includes(s)),
+    );
+    let bpm = 110,
       playing = false,
-      iv = null,
-      step = 0;
+      timer = 0,
+      run = 0,
+      step = 0,
+      nextTime = 0,
+      shown = -1,
+      noiseBuf = null;
     const seq = h("div", { class: "w-seq" });
+    const wrap = h("div", { class: "w-seq-wrap" }, seq);
     const cellEls = [];
-    tracks.forEach((name, ti) => {
-      const row = h(
-        "div",
-        { class: "w-seq-row" },
-        h("span", { class: "w-seq-label" }, name),
-      );
-      const cells = [];
-      for (let s = 0; s < STEPS; s++) {
-        const c = h("button", {
-          class: `w-seq-cell${s % 4 === 0 ? " group" : ""}`,
-          type: "button",
-          "aria-label": `${name} step ${s + 1}`,
-        });
-        c.onclick = () => {
-          grid[ti][s] = !grid[ti][s];
-          c.classList.toggle("on", grid[ti][s]);
-        };
-        cells.push(c);
-        row.append(c);
-      }
-      cellEls.push(cells);
-      seq.append(row);
-    });
-    const sound = (ti) => {
-      const ac = audio(),
-        t = ac.currentTime,
-        g = ac.createGain();
+    const pop = (el, from) => {
+      if (calmMotion()) return;
+      el.animate([{ scale: from }, { scale: 1 }], {
+        duration: 220,
+        easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+      });
+    };
+    const sound = (ti, t) => {
+      const ac = audio();
+      const g = ac.createGain();
       g.connect(ac.destination);
       if (ti === 0) {
         const o = ac.createOscillator();
@@ -4849,112 +6698,132 @@ reg({
         g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
         o.connect(g);
         o.start(t);
-        o.stop(t + 0.15);
-      } else if (ti === 1 || ti === 3) {
-        const b = ac.createBufferSource();
-        const buf = ac.createBuffer(1, ac.sampleRate * 0.2, ac.sampleRate);
-        const d = buf.getChannelData(0);
-        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-        b.buffer = buf;
-        const f = ac.createBiquadFilter();
-        f.type = "bandpass";
-        f.frequency.value = ti === 1 ? 1800 : 1200;
-        g.gain.setValueAtTime(0.5, t);
-        g.gain.exponentialRampToValueAtTime(0.001, t + (ti === 3 ? 0.12 : 0.2));
-        b.connect(f);
-        f.connect(g);
-        b.start(t);
-      } else {
-        const b = ac.createBufferSource();
-        const buf = ac.createBuffer(1, ac.sampleRate * 0.05, ac.sampleRate);
-        const d = buf.getChannelData(0);
-        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-        b.buffer = buf;
-        const f = ac.createBiquadFilter();
-        f.type = "highpass";
-        f.frequency.value = 7000;
-        g.gain.setValueAtTime(0.3, t);
-        g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
-        b.connect(f);
-        f.connect(g);
-        b.start(t);
-      }
-    };
-    const tick = () => {
-      if (!seq.isConnected) {
-        clearInterval(iv);
-        iv = null;
-        playing = false;
+        o.stop(t + 0.16);
         return;
       }
-      cellEls.forEach((cells) => {
-        cells.forEach((c, i) => {
-          c.classList.toggle("playhead", i === step);
-        });
-      });
-      tracks.forEach((_, ti) => {
-        if (grid[ti][step]) sound(ti);
-      });
-      step = (step + 1) % STEPS;
+      if (!noiseBuf) {
+        noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.2, ac.sampleRate);
+        const d = noiseBuf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      }
+      const b = ac.createBufferSource();
+      b.buffer = noiseBuf;
+      const f = ac.createBiquadFilter();
+      const len = { 1: 0.2, 2: 0.05, 3: 0.12 }[ti];
+      f.type = ti === 2 ? "highpass" : "bandpass";
+      f.frequency.value = { 1: 1800, 2: 7000, 3: 1200 }[ti];
+      g.gain.setValueAtTime(ti === 2 ? 0.3 : 0.5, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + len);
+      b.connect(f);
+      f.connect(g);
+      b.start(t);
+      b.stop(t + len + 0.01);
     };
-    const playBtn = h("button", { class: "w-btn primary" }, "play");
-    playBtn.onclick = () => {
-      playing = !playing;
-      playBtn.textContent = playing ? "stop" : "play";
-      playBtn.classList.toggle("active", playing);
-      if (playing) {
-        step = 0;
-        iv = setInterval(tick, 60000 / bpm / 4);
-      } else {
-        clearInterval(iv);
-        cellEls.forEach((cells) => {
-          cells.forEach((c) => {
-            c.classList.remove("playhead");
-          });
+    const hasNotes = () => grid.some((t) => t.includes(true));
+    const clear = h("button", { class: "w-btn", type: "button" }, "clear");
+    tracks.forEach((name, ti) => {
+      for (const half of [0, 1]) {
+        const lb = h("span", { class: "w-seq-label" }, name);
+        lb.style.setProperty("--t", ti);
+        lb.style.setProperty("--half", half);
+        if (half) lb.setAttribute("aria-hidden", "true");
+        seq.append(lb);
+      }
+      const cells = [];
+      for (let s = 0; s < STEPS; s++) {
+        const c = h("button", {
+          class: `w-seq-cell${s % 4 === 0 ? " beat" : ""}${grid[ti][s] ? " on" : ""}`,
+          type: "button",
+          "aria-label": `${name} step ${s + 1}`,
+          "aria-pressed": grid[ti][s],
         });
+        c.style.setProperty("--t", ti);
+        c.style.setProperty("--s", s);
+        c.style.setProperty("--s8", s % 8);
+        c.style.setProperty("--half", s < 8 ? 0 : 1);
+        c.onclick = () => {
+          grid[ti][s] = !grid[ti][s];
+          c.classList.toggle("on", grid[ti][s]);
+          c.setAttribute("aria-pressed", grid[ti][s]);
+          clear.disabled = !hasNotes();
+          if (!grid[ti][s]) return;
+          pop(c, 1.12);
+          if (!playing) sound(ti, audio().currentTime);
+        };
+        cells.push(c);
+        seq.append(c);
+      }
+      cellEls.push(cells);
+    });
+    const show = (s) => {
+      if (shown >= 0)
+        for (const cells of cellEls) cells[shown].classList.remove("now");
+      shown = s;
+      if (s < 0) return;
+      cellEls.forEach((cells, ti) => {
+        cells[s].classList.add("now");
+        if (grid[ti][s]) pop(cells[s], 1.18);
+      });
+    };
+    const halt = () => {
+      playing = false;
+      run++;
+      clearInterval(timer);
+      show(-1);
+      setPlaying(playBtn, false);
+    };
+    const schedule = () => {
+      if (!seq.isConnected) return halt();
+      const ac = audio();
+      const id = run;
+      while (nextTime < ac.currentTime + 0.1) {
+        const s = step;
+        grid.forEach((row, ti) => {
+          if (row[s]) sound(ti, nextTime);
+        });
+        setTimeout(
+          () => {
+            if (id === run) show(s);
+          },
+          Math.max(0, (nextTime - ac.currentTime) * 1000),
+        );
+        nextTime += 60 / bpm / 4;
+        step = (step + 1) % STEPS;
       }
     };
-    const bpmVal = h("span", { class: "w-range-val" }, bpm);
-    const bpmIn = h("input", {
-      class: "w-range",
-      type: "range",
+    const playBtn = mkPlayBtn(() => {
+      if (playing) return halt();
+      playing = true;
+      setPlaying(playBtn, true);
+      step = 0;
+      nextTime = audio().currentTime + 0.05;
+      schedule();
+      timer = setInterval(schedule, 25);
+    });
+    const bpmVal = h("span", null, bpm);
+    const bpmIn = slider({
       min: "60",
-      max: "200",
+      max: "180",
       value: bpm,
     });
     bpmIn.oninput = () => {
       bpm = +bpmIn.value;
       bpmVal.textContent = bpm;
-      if (playing) {
-        clearInterval(iv);
-        iv = setInterval(tick, 60000 / bpm / 4);
-      }
     };
-    const clear = h("button", {
-      class: "w-btn",
-      html: "clear",
-      onclick: () => {
-        grid.forEach((t) => {
-          t.fill(false);
-        });
-        cellEls.forEach((cells) => {
-          cells.forEach((c) => {
-            c.classList.remove("on");
-          });
-        });
-      },
-    });
+    clear.onclick = () => {
+      for (const t of grid) t.fill(false);
+      for (const cells of cellEls)
+        for (const c of cells) {
+          c.classList.remove("on");
+          c.setAttribute("aria-pressed", "false");
+        }
+      clear.disabled = true;
+    };
     return card(
       "drum machine",
-      "click steps to build a beat",
-      seq,
-      h(
-        "label",
-        { class: "w-label" },
-        "tempo",
-        bpmIn,
-        h("span", { class: "w-seq-tempo" }, bpmVal, " bpm"),
-      ),
+      "tap steps to turn them on or off",
+      wrap,
+      sliderField("tempo", bpmIn, bpmVal, " bpm"),
       h("div", { class: "w-btn-row" }, playBtn, clear),
     );
   },
@@ -4973,124 +6842,293 @@ reg({
       pentatonic: [0, 2, 4, 7, 9],
       blues: [0, 3, 5, 6, 7, 10],
     };
-    let notes = [];
-    const vis = h("div", { class: "w-melody-vis" });
-    const scaleSel = h(
-      "select",
-      { class: "w-select" },
-      ...Object.keys(scales).map((s) => h("option", { value: s }, s)),
-    );
-    const gen = () => {
-      const sc = scales[scaleSel.value],
-        root = 60;
-      notes = Array.from(
-        { length: 16 },
-        () =>
-          root +
-          sc[Math.floor(Math.random() * sc.length)] +
-          12 * (Math.random() < 0.25 ? 1 : 0),
-      );
-      vis.replaceChildren(
-        ...notes.map((n) => {
-          const bar = h("div", { class: "w-melody-bar" });
-          bar.style.height = `${20 + ((n - 60) / 24) * 80}%`;
-          return bar;
-        }),
-      );
+    const STEPS = 16;
+    const STEP_S = 0.24;
+    let notes = [],
+      scale = "major",
+      voices = [],
+      timers = [];
+    const roll = h("div", { class: "w-melody-roll", "aria-hidden": "true" });
+    const unlight = () => {
+      for (const n of notes) n.el.classList.remove("lit");
     };
-    const play = async () => {
+    const stop = () => {
+      const t = audio().currentTime;
+      for (const { o, g } of voices) {
+        g.gain.cancelScheduledValues(t);
+        g.gain.setTargetAtTime(0.0001, t, 0.015);
+        o.stop(t + 0.1);
+      }
+      for (const id of timers) clearTimeout(id);
+      voices = [];
+      timers = [];
+      unlight();
+      setPlaying(playBtn, false);
+    };
+    const gen = () => {
+      if (voices.length) stop();
+      const sc = scales[scale];
+      const top = sc.length * 2;
+      const pick = (pairs) => {
+        let r = Math.random();
+        for (const [v, w] of pairs) {
+          r -= w;
+          if (r < 0) return v;
+        }
+        return pairs[0][0];
+      };
+      let deg =
+        sc.length +
+        pick([
+          [0, 0.5],
+          [2, 0.3],
+          [4, 0.2],
+        ]);
+      let at = 0;
+      notes = [];
+      while (at < STEPS) {
+        const left = STEPS - at;
+        let len = Math.min(
+          left,
+          pick([
+            [1, 0.45],
+            [2, 0.4],
+            [4, 0.15],
+          ]),
+        );
+        if (left - len === 1) len = left;
+        if (at > 0 && left > 2 && Math.random() < 0.1) {
+          at += 1;
+          continue;
+        }
+        const last = at + len >= STEPS;
+        if (last) deg = deg >= sc.length ? sc.length : 0;
+        const midi =
+          60 + 12 * Math.floor(deg / sc.length) + sc[deg % sc.length];
+        notes.push({ midi, at, len });
+        at += len;
+        const move = pick([
+          [1, 0.35],
+          [-1, 0.35],
+          [2, 0.12],
+          [-2, 0.12],
+          [0, 0.06],
+        ]);
+        deg = Math.max(0, Math.min(top, deg + move));
+      }
+      const pitches = notes.map((n) => n.midi);
+      const lo = Math.min(...pitches);
+      const span = Math.max(12, Math.max(...pitches) - lo);
+      const base = lo - (span - (Math.max(...pitches) - lo)) / 2;
+      for (const n of notes) {
+        n.el = h("span", { class: "w-melody-note" });
+        n.el.style.setProperty("--at", n.at);
+        n.el.style.setProperty("--len", n.len);
+        n.el.style.setProperty("--y", (n.midi - base) / span);
+      }
+      roll.replaceChildren(...notes.map((n) => n.el));
+    };
+    const play = () => {
+      if (voices.length) return stop();
       const ac = audio();
-      let t = ac.currentTime + 0.05;
-      const bars = [...vis.children];
-      notes.forEach((n, i) => {
+      const t0 = ac.currentTime + 0.05;
+      setPlaying(playBtn, true);
+      for (const n of notes) {
+        const t = t0 + n.at * STEP_S;
+        const dur = n.len * STEP_S;
         const o = ac.createOscillator(),
           g = ac.createGain();
         o.type = "triangle";
-        o.frequency.value = noteFreq(n);
+        o.frequency.value = noteFreq(n.midi);
         g.gain.setValueAtTime(0.001, t);
         g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+        g.gain.setTargetAtTime(0.12, t + 0.02, 0.15);
+        g.gain.setTargetAtTime(0.0001, t + dur - 0.05, 0.02);
         o.connect(g);
         g.connect(ac.destination);
         o.start(t);
-        o.stop(t + 0.25);
-        const at = (t - ac.currentTime) * 1000;
-        setTimeout(() => {
-          if (vis.isConnected) {
-            bars.forEach((b) => {
-              b.classList.remove("lit");
-            });
-            bars[i]?.classList.add("lit");
-          }
-        }, at);
-        t += 0.25;
-      });
+        o.stop(t + dur + 0.05);
+        voices.push({ o, g });
+        timers.push(
+          setTimeout(
+            () => {
+              if (!roll.isConnected) return;
+              unlight();
+              n.el.classList.add("lit");
+            },
+            (t - ac.currentTime) * 1000,
+          ),
+        );
+      }
+      timers.push(
+        setTimeout(
+          () => {
+            voices = [];
+            timers = [];
+            unlight();
+            setPlaying(playBtn, false);
+          },
+          (t0 + STEPS * STEP_S - ac.currentTime) * 1000,
+        ),
+      );
     };
-    scaleSel.onchange = gen;
+    const playBtn = mkPlayBtn(play);
+    const scaleSeg = segmented("scale", Object.keys(scales), scale, (s) => {
+      scale = s;
+      gen();
+    });
     gen();
     return card(
       "melody generator",
-      "procedural tunes in a scale",
-      vis,
-      h(
-        "div",
-        { class: "w-row" },
-        h("label", { class: "w-label" }, "scale", scaleSel),
-      ),
+      "a random two-bar tune in the scale you pick",
+      roll,
+      h("div", { class: "w-label col" }, "scale", scaleSeg),
       h(
         "div",
         { class: "w-btn-row" },
-        h("button", { class: "w-btn primary", html: "play", onclick: play }),
-        h("button", { class: "w-btn", html: "regenerate", onclick: gen }),
+        playBtn,
+        h("button", {
+          class: "w-btn",
+          type: "button",
+          html: "regenerate",
+          onclick: gen,
+        }),
       ),
     );
   },
 });
 
-////// games / fun ///////////////////////////////////////////////////////////
+const gameStat = (label, value = "0") => {
+  const v = h("b", null, value);
+  const el = h("div", { class: "w-game-stat" }, h("span", null, label), v);
+  return {
+    el,
+    set: (x) => {
+      v.textContent = String(x);
+    },
+  };
+};
+
+const gameBar = (stats, ...actions) =>
+  h(
+    "div",
+    { class: "w-game-bar" },
+    h("div", { class: "w-game-stats" }, ...stats.map((s) => s.el)),
+    actions.length ? h("div", { class: "w-game-acts" }, ...actions) : null,
+  );
 
 reg({
   id: "reaction",
   match: (q) =>
     /^(?:reaction\s+(?:time|test|speed)|reflex\s+test)$/i.test(q.trim()),
   build: () => {
-    let state = "idle",
-      t0 = 0,
-      to = null;
-    const pad = h("div", { class: "w-react-pad" }, "click to start");
-    const best = h("div", { class: "w-sub w-center w-react-best" });
+    let state = "idle";
+    let t0 = 0;
+    let to = null;
+    let raf = 0;
+    let swallow = false;
+    const main = h("span", { class: "w-react-main" }, "click to start");
+    const hint = h(
+      "span",
+      { class: "w-react-hint" },
+      "wait for green, then click as fast as you can",
+    );
+    const pad = h(
+      "button",
+      { class: "w-react-pad", type: "button" },
+      main,
+      hint,
+    );
+    const recent = [];
+    let tries = 0;
     let bestMs = +(localStorage.getItem("w-reaction-best") || Infinity);
-    if (Number.isFinite(bestMs)) best.textContent = `best: ${bestMs} ms`;
-    pad.onclick = () => {
+    const bestS = gameStat("best");
+    const avgS = gameStat("average");
+    const triesS = gameStat("tries");
+    const bar = gameBar([bestS, avgS, triesS]);
+    const showStats = () => {
+      bar.hidden = !Number.isFinite(bestMs);
+      bestS.set(`${bestMs} ms`);
+      avgS.set(
+        recent.length
+          ? `${Math.round(recent.reduce((a, b) => a + b, 0) / recent.length)} ms`
+          : "none",
+      );
+      triesS.set(tries);
+    };
+    showStats();
+    const set = (cls, text, sub) => {
+      pad.className = `w-react-pad${cls ? ` ${cls}` : ""}`;
+      main.className = "w-react-main";
+      main.textContent = text;
+      hint.textContent = sub;
+    };
+    const act = () => {
+      cancelAnimationFrame(raf);
       if (state === "idle" || state === "result") {
         state = "wait";
-        pad.className = "w-react-pad wait";
-        pad.textContent = "wait for green…";
+        set("wait", "wait for green", "don't click yet");
         to = setTimeout(
           () => {
             state = "go";
-            pad.className = "w-react-pad go";
-            pad.textContent = "click now";
+            set("go", "click!", "now");
             t0 = performance.now();
           },
-          1000 + Math.random() * 3000,
+          1200 + Math.random() * 2800,
         );
-      } else if (state === "wait") {
+        return;
+      }
+      if (state === "wait") {
         clearTimeout(to);
         state = "idle";
-        pad.className = "w-react-pad early";
-        pad.textContent = "too soon · click to retry";
-      } else if (state === "go") {
-        const ms = Math.round(performance.now() - t0);
-        bestMs = Math.min(bestMs, ms);
-        localStorage.setItem("w-reaction-best", bestMs);
-        state = "result";
-        pad.className = "w-react-pad";
-        pad.textContent = `${ms} ms · click to retry`;
-        best.textContent = `best: ${bestMs} ms`;
+        set("early", "too soon", "click to try again");
+        return;
       }
+      const ms = Math.round(performance.now() - t0);
+      const fresh = ms < bestMs;
+      bestMs = Math.min(bestMs, ms);
+      localStorage.setItem("w-reaction-best", bestMs);
+      recent.push(ms);
+      if (recent.length > 5) recent.shift();
+      tries++;
+      state = "result";
+      const verdict = fresh
+        ? "new best"
+        : ms < 220
+          ? "faster than most people"
+          : ms < 320
+            ? "about average"
+            : "slower than average";
+      set(
+        `result${fresh ? " fresh" : ""}`,
+        "0",
+        `${verdict} · click to try again`,
+      );
+      main.classList.add("ms");
+      showStats();
+      const start = performance.now();
+      const dur = calmMotion() ? 0 : Math.min(420, 200 + ms / 3);
+      const step = (now) => {
+        const p = dur ? Math.min(1, (now - start) / dur) : 1;
+        main.textContent = String(Math.round(ms * (1 - (1 - p) ** 3)));
+        if (p < 1) raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
     };
-    return card("reaction time", "click when the box turns green", pad, best);
+    pad.onpointerdown = (e) => {
+      swallow = false;
+      if (e.button || (state !== "wait" && state !== "go")) return;
+      swallow = true;
+      act();
+    };
+    pad.onclick = () => {
+      if (swallow) {
+        swallow = false;
+        return;
+      }
+      act();
+    };
+    return card("reaction time", null, bar, pad);
   },
 });
 
@@ -5100,11 +7138,36 @@ reg({
     /^(?:tic[\s-]?tac[\s-]?toe|noughts\s+and\s+crosses|xox)$/i.test(q.trim()),
   build: () => {
     let board = Array(9).fill("");
-    const status = h("div", { class: "w-sub w-ttt-status" }, "your turn (X)");
+    let game = 0;
+    let busy = false;
+    let level = localStorage.getItem("w-ttt-level") || "unbeatable";
+    const MARK = {
+      X: `<svg viewBox="0 0 40 40" aria-hidden="true"><path d="M11 11L29 29" pathLength="1"/><path d="M29 11L11 29" pathLength="1"/></svg>`,
+      O: `<svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="10.5" pathLength="1"/></svg>`,
+    };
+    const youS = gameStat(
+      h("span", { class: "w-ttt-who x" }, "you", h("i", { html: MARK.X })),
+    );
+    const tieS = gameStat("ties");
+    const cpuS = gameStat(
+      h("span", { class: "w-ttt-who o" }, "computer", h("i", { html: MARK.O })),
+    );
+    const tally = [0, 0, 0];
+    const newBtn = h(
+      "button",
+      { class: "w-btn w-game-new", type: "button" },
+      "new game",
+    );
+    const status = h("div", { class: "w-game-status", role: "status" });
+    const line = h("div", { class: "w-ttt-line", "aria-hidden": "true" });
     const grid = h("div", { class: "w-ttt" });
     const setStatus = (text, tone = "") => {
       status.textContent = text;
-      status.className = `w-sub w-ttt-status${tone ? ` ${tone}` : ""}`;
+      status.className = `w-game-status${tone ? ` ${tone}` : ""}`;
+    };
+    const setTurn = (who) => {
+      youS.el.classList.toggle("on", who === "X");
+      cpuS.el.classList.toggle("on", who === "O");
     };
     const wins = [
       [0, 1, 2],
@@ -5116,75 +7179,145 @@ reg({
       [0, 4, 8],
       [2, 4, 6],
     ];
+    const winLine = (b) =>
+      wins.find(([a, c, d]) => b[a] && b[a] === b[c] && b[a] === b[d]);
     const winner = (b) => {
-      for (const [a, c, d] of wins)
-        if (b[a] && b[a] === b[c] && b[a] === b[d]) return b[a];
+      const w = winLine(b);
+      if (w) return b[w[0]];
       return b.every(Boolean) ? "tie" : null;
     };
-    const minimax = (b, me) => {
+    const minimax = (b, me, depth = 0) => {
       const w = winner(b);
-      if (w === "O") return { score: 10 };
-      if (w === "X") return { score: -10 };
+      if (w === "O") return { score: 10 - depth };
+      if (w === "X") return { score: depth - 10 };
       if (w === "tie") return { score: 0 };
       let best = me ? { score: -Infinity } : { score: Infinity };
       for (let i = 0; i < 9; i++)
         if (!b[i]) {
           b[i] = me ? "O" : "X";
-          const s = minimax(b, !me).score;
+          const s = minimax(b, !me, depth + 1).score;
           b[i] = "";
           if (me ? s > best.score : s < best.score)
             best = { score: s, move: i };
         }
       return best;
     };
-    const render = () =>
-      [...grid.children].forEach((c, i) => {
-        const mark = board[i];
-        const fresh = mark && c.textContent !== mark;
-        c.textContent = mark;
-        c.className = `w-ttt-cell${mark ? ` filled ${mark === "X" ? "x" : "o"}` : ""}`;
-        if (fresh) {
-          void c.offsetWidth;
-          c.classList.add("place");
-        }
-      });
-    const reset = () => {
-      board = Array(9).fill("");
-      setStatus("your turn (X)");
-      render();
+    const aiMove = () => {
+      const free = board.flatMap((v, i) => (v ? [] : [i]));
+      const pick = (list) => list[Math.floor(Math.random() * list.length)];
+      if (free.length === 9) return pick([0, 2, 4, 6, 8]);
+      if (level === "easy" || (level === "medium" && Math.random() < 0.45))
+        return pick(free);
+      return minimax(board, true).move;
     };
-    for (let i = 0; i < 9; i++) {
-      const c = h("div", { class: "w-ttt-cell" });
+    const place = (i, mark) => {
+      board[i] = mark;
+      const c = cells[i];
+      c.className = `w-ttt-cell filled ${mark.toLowerCase()}`;
+      c.innerHTML = MARK[mark];
+      c.setAttribute("aria-label", `${c.getAttribute("aria-label")}: ${mark}`);
+    };
+    const finish = () => {
+      const w = winner(board);
+      if (!w) return false;
+      setTurn(null);
+      grid.classList.add("over");
+      const slot = w === "X" ? 0 : w === "tie" ? 1 : 2;
+      tally[slot]++;
+      [youS, tieS, cpuS][slot].set(tally[slot]);
+      if (w === "tie") {
+        grid.classList.add("tie");
+        setStatus("tie game");
+        return true;
+      }
+      const trio = winLine(board);
+      for (const [i, c] of cells.entries())
+        c.classList.add(trio.includes(i) ? "win" : "dim");
+      const [a, , d] = trio.map((i) => cells[i]);
+      const ax = a.offsetLeft + a.offsetWidth / 2;
+      const ay = a.offsetTop + a.offsetHeight / 2;
+      const dx = d.offsetLeft + d.offsetWidth / 2;
+      const dy = d.offsetTop + d.offsetHeight / 2;
+      const len = Math.hypot(dx - ax, dy - ay) + a.offsetWidth * 0.5;
+      line.style.width = `${len}px`;
+      line.style.left = `${(ax + dx) / 2}px`;
+      line.style.top = `${(ay + dy) / 2}px`;
+      line.style.rotate = `${Math.atan2(dy - ay, dx - ax)}rad`;
+      line.className = `w-ttt-line show ${w.toLowerCase()}`;
+      if (w === "X") setStatus("you win", "win");
+      else setStatus("computer wins", "lose");
+      return true;
+    };
+    const cpuTurn = () => {
+      busy = true;
+      setTurn("O");
+      setStatus("computer is thinking…", "wait");
+      const g = game;
+      setTimeout(() => {
+        if (g !== game) return;
+        busy = false;
+        const ai = aiMove();
+        if (ai != null) place(ai, "O");
+        if (finish()) return;
+        setTurn("X");
+        setStatus("your turn");
+      }, 320);
+    };
+    const cells = Array.from({ length: 9 }, (_, i) => {
+      const c = h("button", {
+        class: "w-ttt-cell",
+        type: "button",
+        "aria-label": `row ${Math.floor(i / 3) + 1}, column ${(i % 3) + 1}`,
+      });
       c.onclick = () => {
-        if (board[i] || winner(board)) return;
-        board[i] = "X";
-        render();
-        let w = winner(board);
-        if (w) {
-          if (w === "tie") setStatus("tie · nobody wins");
-          else setStatus("you win 🎉", "win");
-          return;
-        }
-        const ai = minimax(board, true).move;
-        if (ai != null) board[ai] = "O";
-        render();
-        w = winner(board);
-        if (!w) setStatus("your turn (X)");
-        else if (w === "tie") setStatus("tie · nobody wins");
-        else setStatus("computer wins 💀", "lose");
+        if (busy || board[i] || winner(board)) return;
+        place(i, "X");
+        if (!finish()) cpuTurn();
       };
       grid.append(c);
-    }
+      return c;
+    });
+    grid.append(line);
+    const reset = () => {
+      game++;
+      busy = false;
+      board = Array(9).fill("");
+      for (const [i, c] of cells.entries()) {
+        c.className = "w-ttt-cell";
+        c.replaceChildren();
+        c.setAttribute(
+          "aria-label",
+          `row ${Math.floor(i / 3) + 1}, column ${(i % 3) + 1}`,
+        );
+      }
+      grid.classList.remove("tie", "over");
+      line.className = "w-ttt-line";
+      if (game % 2 === 0) return cpuTurn();
+      setTurn("X");
+      setStatus("your turn");
+    };
+    newBtn.onclick = reset;
+    const levels = segmented(
+      "difficulty",
+      ["easy", "medium", "unbeatable"],
+      level,
+      (v) => {
+        level = v;
+        localStorage.setItem("w-ttt-level", v);
+        reset();
+      },
+    );
     reset();
     return card(
       "tic-tac-toe",
-      "vs unbeatable computer",
-      grid,
-      status,
+      null,
       h(
         "div",
-        { class: "w-btn-row" },
-        h("button", { class: "w-btn", html: "new game", onclick: reset }),
+        { class: "w-game-col" },
+        gameBar([youS, tieS, cpuS], newBtn),
+        grid,
+        status,
+        levels,
       ),
     );
   },
@@ -5195,56 +7328,110 @@ reg({
   match: (q) => /^(?:rock\s+paper\s+scissors|rps)$/i.test(q.trim()),
   build: () => {
     const choices = [
-      ["rock", "🪨"],
-      ["paper", "📄"],
-      ["scissors", "✂️"],
+      ["rock", "✊"],
+      ["paper", "✋"],
+      ["scissors", "✌️"],
     ];
     const rec = JSON.parse(localStorage.getItem("w-rps") || "[0,0,0]");
-    let [wins, losses, ties] = rec;
+    const tally = rec.slice(0, 3).map((n) => +n || 0);
+    const you = h("div", { class: "w-rps-hand you" }, "✊");
+    const cpu = h("div", { class: "w-rps-hand cpu" }, "✊");
+    const stage = h(
+      "div",
+      { class: "w-rps-stage", "aria-hidden": "true" },
+      h("div", { class: "w-rps-side" }, you, h("span", null, "you")),
+      h("span", { class: "w-rps-vs" }, "vs"),
+      h("div", { class: "w-rps-side" }, cpu, h("span", null, "computer")),
+    );
     const result = h(
       "div",
-      { class: "w-big w-center w-rps-result" },
-      "pick rock, paper or scissors",
+      { class: "w-rps-result", role: "status" },
+      "pick your move",
     );
-    const score = h("div", { class: "w-sub w-center w-rps-score" });
-    const showScore = () => {
-      score.textContent = `${wins}W – ${losses}L – ${ties}T`;
-      localStorage.setItem("w-rps", JSON.stringify([wins, losses, ties]));
+    const stats = ["wins", "losses", "ties"].map((label, i) =>
+      gameStat(label, String(tally[i])),
+    );
+    stats[0].el.classList.add("good");
+    stats[1].el.classList.add("bad");
+    const resetBtn = h(
+      "button",
+      { class: "w-btn w-game-new", type: "button" },
+      "reset",
+    );
+    const syncReset = () => {
+      resetBtn.disabled = !tally.some(Boolean);
+    };
+    syncReset();
+    resetBtn.onclick = () => {
+      tally.fill(0);
+      localStorage.removeItem("w-rps");
+      for (const s of stats) s.set(0);
+      syncReset();
+    };
+    let pending = null;
+    const settle = () => {
+      if (!pending) return;
+      const { i, ai, r, timer } = pending;
+      clearTimeout(timer);
+      pending = null;
+      stage.classList.remove("shaking");
+      you.textContent = choices[i][1];
+      cpu.textContent = choices[ai][1];
+      for (const el of [you, cpu]) {
+        el.classList.remove("reveal", "won");
+        void el.offsetWidth;
+        el.classList.add("reveal");
+      }
+      const slot = [2, 0, 1][r];
+      tally[slot]++;
+      localStorage.setItem("w-rps", JSON.stringify(tally));
+      stats[slot].set(tally[slot]);
+      syncReset();
+      if (r === 1) you.classList.add("won");
+      if (r === 2) cpu.classList.add("won");
+      result.textContent =
+        r === 0
+          ? `both ${choices[i][0]}, it's a tie`
+          : r === 1
+            ? `${choices[i][0]} beats ${choices[ai][0]}, you win`
+            : `${choices[ai][0]} beats ${choices[i][0]}, you lose`;
+      result.className = `w-rps-result played${r === 1 ? " win" : r === 2 ? " lose" : ""}`;
     };
     const play = (i) => {
+      settle();
       const ai = Math.floor(Math.random() * 3);
       const r = (3 + i - ai) % 3;
-      let tone = "";
-      if (r === 0) {
-        ties++;
-        result.textContent = `${choices[i][1]} vs ${choices[ai][1]} · tie`;
-      } else if (r === 1) {
-        wins++;
-        tone = "win";
-        result.textContent = `${choices[i][1]} beats ${choices[ai][1]} · you win 🎉`;
-      } else {
-        losses++;
-        tone = "lose";
-        result.textContent = `${choices[ai][1]} beats ${choices[i][1]} · you lose 💀`;
-      }
-      result.className = `w-big w-center w-rps-result${tone ? ` ${tone}` : ""}`;
-      void result.offsetWidth;
-      result.classList.add("played");
-      showScore();
+      you.textContent = "✊";
+      cpu.textContent = "✊";
+      you.classList.remove("reveal", "won");
+      cpu.classList.remove("reveal", "won");
+      stage.classList.remove("shaking");
+      void stage.offsetWidth;
+      stage.classList.add("shaking");
+      result.textContent = "rock, paper, scissors…";
+      result.className = "w-rps-result counting";
+      pending = { i, ai, r, timer: setTimeout(settle, calmMotion() ? 0 : 540) };
     };
-    showScore();
     const btns = h(
       "div",
-      { class: "w-btn-row" },
+      { class: "w-rps-picks" },
       ...choices.map(([n, e], i) =>
-        h("button", {
-          class: "w-btn",
-          html: `${e} ${n}`,
-          onclick: () => play(i),
-        }),
+        h(
+          "button",
+          { class: "w-btn", type: "button", onclick: () => play(i) },
+          h("span", { "aria-hidden": "true" }, e),
+          n,
+        ),
       ),
     );
-    return card("rock paper scissors", null, result, score, btns);
+    return card(
+      "rock paper scissors",
+      null,
+      gameBar(stats, resetBtn),
+      stage,
+      result,
+      btns,
+    );
   },
 });
 
@@ -5259,69 +7446,193 @@ reg({
       "how vexingly quick daft zebras jump",
       "sphinx of black quartz judge my vow",
       "the five boxing wizards jump quickly",
+      "jackdaws love my big sphinx of quartz",
+      "quick zephyrs blow vexing daft jim",
+      "two driven jocks help fax my big quiz",
     ];
-    let target = sentences[Math.floor(Math.random() * sentences.length)];
+    let target = "";
     let started = 0;
-    const prompt = h("div", { class: "w-typing-prompt" });
-    const input = h("textarea", {
-      class: "w-textarea",
-      rows: "2",
-      placeholder: "start typing…",
-    });
-    const out = h(
-      "div",
-      { class: "w-sub w-typing-out" },
-      "type the sentence to see your speed",
+    let finished = 0;
+    let typos = 0;
+    let keys = 0;
+    let prevLen = 0;
+    let idle = null;
+    let tick = null;
+    let spans = [];
+    const wpmS = gameStat("wpm");
+    const accS = gameStat("accuracy", "100%");
+    const timeS = gameStat("time", "0.0 s");
+    const newBtn = h(
+      "button",
+      { class: "w-btn w-game-new", type: "button" },
+      "new sentence",
     );
-    const renderPrompt = () => {
-      const at = input.value.length;
-      prompt.replaceChildren(
-        ...[...target].map((ch, i) => {
-          const t = input.value[i];
-          const state = t == null ? "" : t === ch ? "ok" : "bad";
-          return h(
-            "span",
-            { class: i === at ? `${state} cur`.trim() : state },
-            ch,
-          );
-        }),
-      );
+    const bar = gameBar([wpmS, accS, timeS], newBtn);
+    const caret = h("span", { class: "w-typing-caret", "aria-hidden": "true" });
+    const text = h("span", { class: "w-typing-text", "aria-hidden": "true" });
+    const input = h("textarea", {
+      class: "w-typing-input",
+      rows: "1",
+      spellcheck: "false",
+      autocapitalize: "off",
+      autocomplete: "off",
+      autocorrect: "off",
+      "aria-label": "type the sentence shown",
+    });
+    const prompt = h("label", { class: "w-typing-prompt" }, text, caret, input);
+    const hint = h("div", { class: "w-game-status", role: "status" });
+    const moveCaret = (instant) => {
+      const at = Math.min(input.value.length, target.length);
+      const ref = spans[Math.min(at, spans.length - 1)];
+      if (!ref) return;
+      const x =
+        at >= spans.length ? ref.offsetLeft + ref.offsetWidth : ref.offsetLeft;
+      if (instant) caret.style.transition = "none";
+      caret.style.translate = `${x}px ${ref.offsetTop}px`;
+      caret.style.height = `${ref.offsetHeight}px`;
+      if (instant) {
+        void caret.offsetWidth;
+        caret.style.transition = "";
+      }
+      caret.classList.add("moving");
+      clearTimeout(idle);
+      idle = setTimeout(() => caret.classList.remove("moving"), 600);
     };
-    input.oninput = () => {
-      if (!started) started = performance.now();
-      renderPrompt();
-      if (input.value === target) {
-        const mins = (performance.now() - started) / 60000;
-        const wpm = Math.round(target.split(" ").length / mins);
-        out.textContent = `${wpm} wpm 🎉`;
-        out.className = "w-sub w-typing-out done";
+    const paint = () => {
+      const v = input.value;
+      for (const [i, s] of spans.entries()) {
+        const t = v[i];
+        s.className = t == null ? "" : t === target[i] ? "ok" : "bad";
       }
     };
-    const reset = () => {
-      target = sentences[Math.floor(Math.random() * sentences.length)];
-      input.value = "";
-      started = 0;
-      out.textContent = "type the sentence to see your speed";
-      out.className = "w-sub w-typing-out";
-      renderPrompt();
+    const stats = () => {
+      const end = finished || performance.now();
+      const secs = started ? (end - started) / 1000 : 0;
+      const correct = [...input.value].filter((c, i) => c === target[i]).length;
+      const wpm =
+        secs > 1.5 || finished ? Math.round(correct / 5 / (secs / 60)) : 0;
+      wpmS.set(wpm);
+      accS.set(`${keys ? Math.round(((keys - typos) / keys) * 100) : 100}%`);
+      timeS.set(`${secs.toFixed(1)} s`);
     };
-    renderPrompt();
-    return card(
-      "typing speed test",
-      null,
-      prompt,
-      input,
-      out,
-      h(
-        "div",
-        { class: "w-btn-row" },
-        h("button", { class: "w-btn", html: "new sentence", onclick: reset }),
-      ),
-    );
+    const setHint = (msg, tone = "") => {
+      hint.textContent = msg;
+      hint.className = `w-game-status${tone ? ` ${tone}` : ""}`;
+    };
+    input.oninput = () => {
+      if (finished) {
+        input.value = target;
+        return;
+      }
+      if (!started) {
+        started = performance.now();
+        clearInterval(tick);
+        tick = setInterval(() => {
+          if (!input.isConnected || finished) return clearInterval(tick);
+          stats();
+        }, 100);
+      }
+      const v = input.value;
+      if (v.length > prevLen) {
+        keys += v.length - prevLen;
+        if (v[v.length - 1] !== target[v.length - 1]) typos++;
+      }
+      prevLen = v.length;
+      paint();
+      moveCaret(false);
+      if (v === target) {
+        finished = performance.now();
+        clearInterval(tick);
+        prompt.classList.add("done");
+        bar.classList.add("done");
+        setHint("done. press enter for another sentence", "win");
+      } else setHint("");
+      stats();
+    };
+    const reset = () => {
+      const pool = sentences.filter((s) => s !== target);
+      target = pool[Math.floor(Math.random() * pool.length)];
+      input.value = "";
+      input.maxLength = target.length + 8;
+      started = 0;
+      finished = 0;
+      typos = 0;
+      keys = 0;
+      prevLen = 0;
+      clearInterval(tick);
+      spans = [...target].map((ch) => h("span", null, ch));
+      text.replaceChildren(...spans);
+      prompt.classList.remove("done");
+      bar.classList.remove("done");
+      setHint("click the sentence and start typing");
+      stats();
+      requestAnimationFrame(() => moveCaret(true));
+    };
+    input.onkeydown = (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      if (finished) reset();
+    };
+    input.onfocus = () => {
+      prompt.classList.add("focus");
+      if (!started) setHint("the timer starts on your first key");
+    };
+    input.onblur = () => {
+      prompt.classList.remove("focus");
+      if (!started) setHint("click the sentence and start typing");
+    };
+    newBtn.onclick = () => {
+      reset();
+      input.focus();
+    };
+    reset();
+    return card("typing speed test", null, bar, prompt, hint);
   },
 });
 
-////// dev / reference /////////////////////////////////////////////////////////
+const devPanel = (label, body, getCopy, copyTitle) => {
+  const name = h("span", { class: "w-dev-label" }, label);
+  const meta = h("span", { class: "w-dev-meta" });
+  const copy = getCopy ? copyBtn(getCopy, copyTitle) : null;
+  const panel = h(
+    "div",
+    { class: "w-dev-panel" },
+    h("div", { class: "w-dev-bar" }, name, meta, copy),
+    body,
+  );
+  return { panel, name, meta, copy };
+};
+
+const devEditor = (label, rows, placeholder, value) =>
+  h(
+    "textarea",
+    {
+      class: "w-dev-edit",
+      rows,
+      placeholder,
+      spellcheck: "false",
+      autocapitalize: "off",
+      autocomplete: "off",
+      "aria-label": label,
+    },
+    value,
+  );
+
+const devRel = (ms) => {
+  const s = ms / 1000;
+  const [unit, size] = [
+    ["year", 31536000],
+    ["month", 2592000],
+    ["week", 604800],
+    ["day", 86400],
+    ["hour", 3600],
+    ["minute", 60],
+  ].find(([, n]) => Math.abs(s) >= n) ?? ["second", 1];
+  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(
+    Math.round(s / size),
+    unit,
+  );
+};
 
 reg({
   id: "json",
@@ -5330,37 +7641,162 @@ reg({
       q.trim(),
     ),
   build: () => {
-    const input = h("textarea", {
-      class: "w-textarea",
-      rows: "4",
-      placeholder: '{"hello": "world"}',
-    });
-    const out = h("pre", { class: "w-code w-json-out" });
+    const input = devEditor("json input", "7", '{"hello": "world"}');
+    const src = devPanel("input", input);
+    const code = h("pre", { class: "w-dev-code w-json-code" });
+    let text = "";
+    let indent = 2;
+    const out = devPanel("output", code, () => text);
+    const locate = (s) => {
+      let i = 0;
+      const shown = () => (i >= s.length ? "end of input" : `"${s[i]}"`);
+      const fail = (msg) => {
+        throw { at: i, msg };
+      };
+      const ws = () => {
+        while (" \t\n\r".includes(s[i] ?? "x")) i++;
+      };
+      const str = () => {
+        i++;
+        while (i < s.length && s[i] !== '"') {
+          if (s[i] < " ")
+            fail("line break or control character inside a string");
+          if (s[i] === "\\") {
+            i++;
+            if (!'"\\/bfnrtu'.includes(s[i] ?? "x")) fail("invalid escape");
+            if (s[i] === "u" && !/^[0-9a-f]{4}$/i.test(s.slice(i + 1, i + 5)))
+              fail("invalid unicode escape");
+          }
+          i++;
+        }
+        if (i >= s.length) fail("unterminated string");
+        i++;
+      };
+      const val = () => {
+        ws();
+        const c = s[i];
+        if (c === "{" || c === "[") {
+          const close = c === "{" ? "}" : "]";
+          i++;
+          ws();
+          if (s[i] === close) return i++;
+          for (;;) {
+            ws();
+            if (c === "{") {
+              if (s[i] !== '"')
+                fail(
+                  s[i] === "'"
+                    ? "keys need double quotes, not single quotes"
+                    : `expected a key in double quotes, got ${shown()}`,
+                );
+              str();
+              ws();
+              if (s[i] !== ":")
+                fail(`expected ":" after the key, got ${shown()}`);
+              i++;
+            }
+            val();
+            ws();
+            if (s[i] === close) return i++;
+            if (s[i] !== ",")
+              fail(`expected "," or "${close}", got ${shown()}`);
+            const comma = i++;
+            ws();
+            if (s[i] === close) {
+              i = comma;
+              fail("trailing comma");
+            }
+          }
+        }
+        if (c === '"') return str();
+        if (c === "'") fail("strings need double quotes, not single quotes");
+        for (const w of ["true", "false", "null"])
+          if (s.startsWith(w, i)) {
+            i += w.length;
+            return;
+          }
+        const num = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(
+          s.slice(i, i + 400),
+        );
+        if (num) {
+          i += num[0].length;
+          return;
+        }
+        fail(`unexpected ${shown()}`);
+      };
+      try {
+        val();
+        ws();
+        if (i < s.length)
+          fail(`unexpected ${shown()} after the end of the json`);
+      } catch (e) {
+        return e;
+      }
+      return null;
+    };
     const run = () => {
-      if (!input.value.trim()) {
-        out.textContent = "";
-        out.className = "w-code w-json-out";
+      const raw = input.value;
+      out.panel.classList.remove("err");
+      input.removeAttribute("aria-invalid");
+      text = "";
+      if (!raw.trim()) {
+        out.meta.textContent = "";
+        out.copy.disabled = true;
+        code.replaceChildren(
+          h("span", { class: "w-dev-empty" }, "paste json above to format it"),
+        );
         return;
       }
+      let value;
       try {
-        out.className = "w-code w-json-out";
-        highlightInto(out, JSON.stringify(JSON.parse(input.value), null, 2));
-      } catch (e) {
-        out.textContent = e.message;
-        out.className = "w-code w-json-out err";
+        value = JSON.parse(raw);
+      } catch {
+        const { at, msg } = locate(raw) ?? { at: 0, msg: "not valid json" };
+        const before = raw.slice(0, at).split("\n");
+        const line = raw.split("\n")[before.length - 1].replace(/\t/g, "  ");
+        const col = before.at(-1).replace(/\t/g, "  ").length;
+        const from = Math.max(0, col - 36);
+        const lead = from ? "…" : "";
+        const gutter = `${before.length} │ `;
+        out.panel.classList.add("err");
+        input.setAttribute("aria-invalid", "true");
+        out.copy.disabled = true;
+        out.meta.textContent = `line ${before.length}, column ${col + 1}`;
+        code.replaceChildren(
+          h("div", { class: "w-dev-errmsg" }, msg),
+          h(
+            "div",
+            { class: "w-dev-errsrc" },
+            `${gutter}${lead}${line.slice(from, col + 36)}\n${" ".repeat(gutter.length + lead.length + col - from)}`,
+            h("span", { class: "w-dev-caret" }, "^"),
+          ),
+        );
+        return;
       }
+      text = JSON.stringify(value, null, indent);
+      const lines = text.split("\n").length;
+      const bytes = new TextEncoder().encode(text).length;
+      out.meta.textContent = `valid, ${lines} line${lines === 1 ? "" : "s"}, ${bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`}`;
+      out.copy.disabled = false;
+      highlightInto(code, text);
     };
+    const style = segmented(
+      "indentation",
+      ["2 spaces", "4 spaces", "tabs", "minified"],
+      "2 spaces",
+      (v) => {
+        indent = { "2 spaces": 2, "4 spaces": 4, tabs: "\t" }[v];
+        run();
+      },
+    );
     input.oninput = run;
+    run();
     return card(
       "json formatter",
-      "parsed and formatted in your browser",
-      h("label", { class: "w-label col" }, "json", input),
-      h(
-        "div",
-        { class: "w-out-row" },
-        out,
-        copyBtn(() => out.textContent),
-      ),
+      "validated and formatted in your browser",
+      src.panel,
+      style,
+      out.panel,
     );
   },
 });
@@ -5375,51 +7811,118 @@ reg({
     return { token: (m[1] || m[2] || "").trim() };
   },
   build: ({ token }) => {
-    const input = h(
-      "textarea",
-      { class: "w-textarea", rows: "3", placeholder: "paste a JWT…" },
+    const input = devEditor(
+      "token",
+      "4",
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
       token,
     );
+    input.classList.add("w-jwt-token");
+    const src = devPanel("token", input);
+    const note = h("div", { class: "w-dev-status", role: "status" });
     const out = h("div", { class: "w-jwt-out" });
-    const note = h("div", { class: "w-note" });
+    const TIMES = [
+      ["iat", "issued"],
+      ["nbf", "valid from"],
+      ["exp", "expires"],
+    ];
+    const decode = (seg) =>
+      JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          Uint8Array.from(
+            atob(seg.replace(/-/g, "+").replace(/_/g, "/")),
+            (c) => c.charCodeAt(0),
+          ),
+        ),
+      );
+    const section = (label, seg) => {
+      const code = h("pre", { class: "w-dev-code" });
+      let text = "";
+      const p = devPanel(label, code, () => text, `copy ${label}`);
+      try {
+        const json = decode(seg);
+        text = JSON.stringify(json, null, 2);
+        highlightInto(code, text);
+        return { ...p, json };
+      } catch {
+        p.panel.classList.add("err");
+        p.copy.disabled = true;
+        p.meta.textContent = "can't decode";
+        code.replaceChildren(
+          h(
+            "div",
+            { class: "w-dev-errmsg" },
+            `this part isn't valid base64url json`,
+          ),
+        );
+        return { ...p, json: null };
+      }
+    };
+    const say = (text, bad) => {
+      note.textContent = text;
+      note.classList.toggle("err", !!bad);
+    };
     const run = () => {
       out.replaceChildren();
-      const parts = input.value.trim().split(".");
-      if (parts.length < 2) {
-        note.textContent = input.value.trim()
-          ? "that isn't a token yet. a jwt looks like header.payload.signature"
-          : "";
-        return;
+      const raw = input.value.trim().replace(/^bearer\s+/i, "");
+      input.removeAttribute("aria-invalid");
+      if (!raw) return say("paste a token to read its header and payload");
+      const parts = raw.split(".");
+      if (parts.length !== 3 && parts.length !== 5) {
+        input.setAttribute("aria-invalid", "true");
+        return say(
+          `a jwt has 3 parts separated by dots, this has ${parts.length}`,
+          true,
+        );
       }
-      note.textContent = "";
-      const labels = ["header", "payload"];
-      parts.slice(0, 2).forEach((p, i) => {
-        try {
-          const json = JSON.parse(
-            decodeURIComponent(
-              escape(atob(p.replace(/-/g, "+").replace(/_/g, "/"))),
-            ),
-          );
-          const pre = h("pre", { class: "w-code" });
-          out.append(
+      const head = section("header", parts[0]);
+      out.append(head.panel);
+      if (head.json?.alg) head.meta.textContent = head.json.alg;
+      if (parts.length === 5)
+        return say(
+          "this is an encrypted token (jwe). only the header is readable without the key",
+        );
+      const body = section("payload", parts[1]);
+      out.append(body.panel);
+      say(
+        head.json && body.json
+          ? "the signature isn't checked, so don't trust these claims"
+          : "",
+      );
+      const claims = body.json ?? {};
+      const now = Date.now();
+      const rows = TIMES.filter(([k]) => typeof claims[k] === "number").map(
+        ([k, label]) => {
+          const at = claims[k] * 1000;
+          return h(
+            "div",
+            { class: "w-dev-row" },
+            h("span", { class: "w-dev-key" }, label),
             h(
-              "div",
-              { class: "w-jwt-section" },
-              h("div", { class: `w-jwt-label ${labels[i]}` }, labels[i]),
-              pre,
+              "span",
+              { class: "w-dev-val" },
+              new Date(at).toLocaleString(undefined, {
+                dateStyle: "medium",
+                timeStyle: "short",
+              }),
             ),
+            h("span", { class: "w-dev-aux" }, devRel(at - now)),
           );
-          highlightInto(pre, JSON.stringify(json, null, 2));
-        } catch {}
-      });
+        },
+      );
+      if (rows.length)
+        body.panel.append(h("div", { class: "w-dev-rows" }, ...rows));
+      if (typeof claims.exp !== "number") return;
+      const expired = claims.exp * 1000 < now;
+      body.meta.textContent = expired ? "expired" : "not expired";
+      body.meta.classList.toggle("bad", expired);
     };
-    input.value = token;
     input.oninput = run;
-    if (token) run();
+    run();
     return card(
       "jwt decoder",
       "decoded in your browser, not sent anywhere",
-      h("label", { class: "w-label col" }, "token", input),
+      src.panel,
       note,
       out,
     );
@@ -5430,66 +7933,125 @@ reg({
   id: "hash",
   match: (q) => {
     const m = q.match(
-      /^(sha-?1|sha-?256|sha-?384|sha-?512)\s+(?:hash\s+of\s+|hash\s+|of\s+)(.+)$|^(sha-?1|sha-?256|sha-?384|sha-?512)\s*[:=]\s*(.+)$|^hash\s+of\s+(.+)$|^hash\s*[:=]\s*(.+)$|^(?:generate\s+)?hash\s+generator$/i,
+      /^(sha-?1|sha-?256|sha-?384|sha-?512)\s+(?:hash\s+of\s+|hash\s+|of\s+)(.+)$|^(sha-?1|sha-?256|sha-?384|sha-?512)\s*[:=]\s*(.+)$|^hash\s+of\s+(.+)$|^hash\s*[:=]\s*(.+)$|^(?:generate\s+)?hash\s+generator$|^(md5)\s+(?:hash\s+(?:of\s+)?|of\s+)?(.+)$/i,
     );
     if (!m) return null;
-    const algoRaw = (m[1] || m[3] || "sha-256")
+    const algoRaw = (m[1] || m[3] || m[7] || "sha-256")
       .toUpperCase()
       .replace(/SHA-?/, "SHA-");
-    return { algo: algoRaw, text: (m[2] || m[4] || m[5] || m[6] || "").trim() };
+    return {
+      algo: algoRaw,
+      text: (m[2] || m[4] || m[5] || m[6] || m[8] || "").trim(),
+    };
   },
   build: ({ algo, text }) => {
-    const sel = h(
-      "select",
-      { class: "w-select" },
-      ...["SHA-1", "SHA-256", "SHA-384", "SHA-512"].map((a) =>
-        h("option", { value: a, ...(a === algo ? { selected: "" } : {}) }, a),
-      ),
-    );
-    const input = h(
-      "textarea",
-      { class: "w-textarea", rows: "2", placeholder: "text to hash…" },
-      text,
-    );
-    const out = h("div", {
-      class: "w-code w-hash-out",
-      "aria-live": "polite",
-    });
+    const ALGOS = ["MD5", "SHA-1", "SHA-256", "SHA-384", "SHA-512"];
+    let current = ALGOS.includes(algo) ? algo : "SHA-256";
+    const md5 = (bytes) => {
+      const K = Array.from(
+        { length: 64 },
+        (_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 2 ** 32) | 0,
+      );
+      const S = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+      const len = bytes.length;
+      const words = (((len + 8) >> 6) + 1) * 16;
+      const w = new Int32Array(words);
+      for (let i = 0; i < len; i++) w[i >> 2] |= bytes[i] << ((i % 4) * 8);
+      w[len >> 2] |= 0x80 << ((len % 4) * 8);
+      w[words - 2] = (len * 8) | 0;
+      w[words - 1] = Math.floor(len / 0x20000000);
+      const st = [0x67452301, 0xefcdab89 | 0, 0x98badcfe | 0, 0x10325476];
+      for (let blk = 0; blk < words; blk += 16) {
+        let [a, b, c, d] = st;
+        for (let i = 0; i < 64; i++) {
+          const r = i >> 4;
+          const f = [
+            (b & c) | (~b & d),
+            (d & b) | (~d & c),
+            b ^ c ^ d,
+            c ^ (b | ~d),
+          ][r];
+          const g = [i, 5 * i + 1, 3 * i + 5, 7 * i][r] % 16;
+          const s = S[r * 4 + (i % 4)];
+          const t = (a + f + K[i] + w[blk + g]) | 0;
+          a = d;
+          d = c;
+          c = b;
+          b = (b + ((t << s) | (t >>> (32 - s)))) | 0;
+        }
+        st[0] = (st[0] + a) | 0;
+        st[1] = (st[1] + b) | 0;
+        st[2] = (st[2] + c) | 0;
+        st[3] = (st[3] + d) | 0;
+      }
+      return st
+        .flatMap((v) =>
+          [0, 8, 16, 24].map((sh) =>
+            ((v >>> sh) & 255).toString(16).padStart(2, "0"),
+          ),
+        )
+        .join("");
+    };
+    const input = devEditor("text to hash", "3", "text to hash", text);
+    input.classList.add("w-hash-src");
+    const src = devPanel("text", input);
+    const code = h("div", { class: "w-dev-code w-hash-digest" });
+    let digest = "";
+    const out = devPanel(current, code, () => digest);
+    let seq = 0;
     const run = async () => {
+      const id = ++seq;
+      out.name.textContent = current;
+      out.panel.classList.remove("err");
       if (!input.value) {
-        out.textContent = "";
-        out.classList.remove("err");
+        digest = "";
+        out.meta.textContent = "";
+        out.copy.disabled = true;
+        code.replaceChildren(
+          h("span", { class: "w-dev-empty" }, "type something to hash it"),
+        );
         return;
       }
+      const bytes = new TextEncoder().encode(input.value);
       try {
-        const buf = await crypto.subtle.digest(
-          sel.value,
-          new TextEncoder().encode(input.value),
+        const hex =
+          current === "MD5"
+            ? md5(bytes)
+            : [...new Uint8Array(await crypto.subtle.digest(current, bytes))]
+                .map((b) => b.toString(16).padStart(2, "0"))
+                .join("");
+        if (id !== seq) return;
+        digest = hex;
+        out.meta.textContent = `${hex.length * 4} bits`;
+        out.copy.disabled = false;
+        code.textContent = hex;
+      } catch {
+        if (id !== seq) return;
+        digest = "";
+        out.panel.classList.add("err");
+        out.copy.disabled = true;
+        out.meta.textContent = "";
+        code.replaceChildren(
+          h(
+            "div",
+            { class: "w-dev-errmsg" },
+            "your browser blocked hashing on this page",
+          ),
         );
-        out.textContent = [...new Uint8Array(buf)]
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("");
-        out.classList.remove("err");
-      } catch (e) {
-        out.textContent = e.message || "hashing failed";
-        out.classList.add("err");
       }
     };
-    input.value = text;
+    const pick = segmented("algorithm", ALGOS, current, (a) => {
+      current = a;
+      run();
+    });
     input.oninput = run;
-    sel.onchange = run;
     run();
     return card(
       "hash generator",
       "hashed in your browser, not sent anywhere",
-      h("label", { class: "w-label col" }, "algorithm", sel),
-      h("label", { class: "w-label col" }, "text", input),
-      h(
-        "div",
-        { class: "w-out-row" },
-        out,
-        copyBtn(() => out.textContent),
-      ),
+      pick,
+      src.panel,
+      out.panel,
     );
   },
 });
@@ -5501,39 +8063,60 @@ reg({
       q.trim(),
     ),
   build: () => {
-    const rows = [
-      ["platform", navigator.platform || "—"],
-      ["language", navigator.language],
-      ["cores", navigator.hardwareConcurrency || "—"],
-      ["memory", navigator.deviceMemory ? `${navigator.deviceMemory} GB` : "—"],
-      ["online", navigator.onLine ? "yes" : "no"],
-      ["touch", navigator.maxTouchPoints > 0 ? "yes" : "no"],
-    ];
+    const ua = navigator.userAgent;
+    const [name, version] =
+      [
+        ["Edge", /Edg(?:e|A|iOS)?\/(\d+)/],
+        ["Opera", /OPR\/(\d+)/],
+        ["Samsung Internet", /SamsungBrowser\/(\d+)/],
+        ["Firefox", /(?:Firefox|FxiOS)\/(\d+)/],
+        ["Chrome", /(?:Chrome|CriOS)\/(\d+)/],
+        ["Safari", /Version\/(\d+(?:\.\d+)?).*Safari/],
+      ]
+        .map(([n, re]) => [n, ua.match(re)?.[1]])
+        .find(([, v]) => v) ?? [];
+    const os =
+      [
+        ["iPadOS", /iPad/],
+        ["iOS", /iPhone|iPod/],
+        ["Android", /Android/],
+        ["ChromeOS", /CrOS/],
+        ["Windows", /Windows/],
+        ["macOS", /Mac OS X|Macintosh/],
+        ["Linux", /Linux/],
+      ].find(([, re]) => re.test(ua))?.[0] ?? "an unknown system";
+    const touch = navigator.maxTouchPoints;
     return card(
       "browser info",
       null,
       h(
         "div",
-        { class: "w-ua" },
+        { class: "w-focal" },
         h(
           "div",
-          { class: "w-ua-agent" },
-          h("div", { class: "w-ua-label" }, "user agent"),
-          h("div", { class: "w-ua-value" }, navigator.userAgent),
+          { class: "w-big" },
+          name ? `${name} ${version}` : "unknown browser",
         ),
-        h(
-          "div",
-          { class: "w-calc-out" },
-          ...rows.map(([l, v]) =>
-            h(
-              "div",
-              { class: "w-stat" },
-              h("span", { class: "w-stat-label" }, l),
-              h("span", { class: "w-stat-val" }, v),
-            ),
-          ),
-        ),
+        h("div", { class: "w-focal-cap" }, `on ${os}`),
       ),
+      h(
+        "div",
+        { class: "w-ua-agent" },
+        h("div", { class: "w-ua-value w-mono" }, ua),
+        copyBtn(() => ua, "copy user agent"),
+      ),
+      kvList([
+        ["language", navigator.languages?.join(", ") || navigator.language],
+        ["cpu cores", navigator.hardwareConcurrency || "not reported"],
+        [
+          "memory",
+          navigator.deviceMemory
+            ? `${navigator.deviceMemory} GB${navigator.deviceMemory >= 8 ? " or more" : ""}`
+            : "not reported",
+        ],
+        ["touch", touch ? `yes, ${touch} points` : "no"],
+        ["cookies", navigator.cookieEnabled ? "enabled" : "blocked"],
+      ]),
     );
   },
 });
@@ -5545,35 +8128,37 @@ reg({
       q.trim(),
     ),
   build: () => {
-    const hero = h("span", { class: "w-screen-num" });
-    const grid = h("div", { class: "w-calc-out" });
+    const hero = h("div", { class: "w-big" });
+    const list = h("div", { class: "w-screen-list" });
     const out = h(
       "div",
       { class: "w-screen" },
       h(
         "div",
-        { class: "w-screen-hero" },
+        { class: "w-focal" },
         hero,
-        h("span", { class: "w-screen-cap" }, "viewport"),
+        h("div", { class: "w-focal-cap" }, "viewport in css pixels"),
       ),
-      grid,
+      list,
     );
     const run = () => {
+      const dpr = window.devicePixelRatio;
       hero.textContent = `${window.innerWidth} × ${window.innerHeight}`;
-      grid.replaceChildren(
-        ...[
+      list.replaceChildren(
+        kvList([
           ["screen", `${screen.width} × ${screen.height}`],
-          ["available", `${screen.availWidth} × ${screen.availHeight}`],
-          ["pixel ratio", window.devicePixelRatio],
+          [
+            "device pixels",
+            `${Math.round(screen.width * dpr)} × ${Math.round(screen.height * dpr)}`,
+          ],
+          ["pixel ratio", `${+dpr.toFixed(2)}x`],
           ["color depth", `${screen.colorDepth}-bit`],
-        ].map(([l, v]) =>
-          h(
-            "div",
-            { class: "w-stat" },
-            h("span", { class: "w-stat-label" }, l),
-            h("span", { class: "w-stat-val" }, v),
-          ),
-        ),
+          [
+            "orientation",
+            screen.orientation?.type.split("-")[0] ??
+              (screen.width >= screen.height ? "landscape" : "portrait"),
+          ],
+        ]),
       );
     };
     run();
@@ -5583,7 +8168,7 @@ reg({
       run();
     };
     window.addEventListener("resize", onResize);
-    return card("display info", "resize your window to watch it update", out);
+    return card("display info", "updates as you resize the window", out);
   },
 });
 
@@ -5591,81 +8176,186 @@ reg({
   id: "regex",
   match: (q) => /^regex\s+(?:tester|test|tool)$|^test\s+regex$/i.test(q.trim()),
   build: () => {
+    const FLAGS = [
+      ["g", "global"],
+      ["i", "ignore case"],
+      ["m", "multiline"],
+      ["s", "dot all"],
+      ["u", "unicode"],
+    ];
+    const on = new Set(["g"]);
     const pat = h("input", {
-      class: "w-input w-mono",
-      placeholder: "pattern e.g. \\d+",
-      value: "\\b\\w+\\b",
+      class: "w-rx-pat",
+      value: "(?<year>\\d{4})-(\\d{2})",
+      placeholder: "pattern",
+      spellcheck: "false",
+      autocapitalize: "off",
+      autocomplete: "off",
+      "aria-label": "pattern",
     });
-    const flags = h("input", {
-      class: "w-input w-mono w-num",
-      placeholder: "flags",
-      value: "g",
+    const flagText = h("span", {
+      class: "w-rx-flagtext",
+      "aria-hidden": "true",
     });
-    const test = h(
-      "textarea",
-      { class: "w-textarea", rows: "3", placeholder: "test string…" },
-      "the year is 2024 and 1999",
+    const field = h(
+      "label",
+      { class: "w-rx-field" },
+      h("span", { class: "w-rx-slash", "aria-hidden": "true" }, "/"),
+      pat,
+      h("span", { class: "w-rx-slash", "aria-hidden": "true" }, "/"),
+      flagText,
     );
-    const status = h("div", { class: "w-rx-status", "aria-live": "polite" });
-    const out = h("pre", { class: "w-code w-rx-out" });
+    const flags = h(
+      "div",
+      { class: "w-dev-chips", role: "group", "aria-label": "flags" },
+      ...FLAGS.map(([f, name]) =>
+        h(
+          "button",
+          {
+            type: "button",
+            class: "w-dev-chip",
+            "aria-pressed": String(on.has(f)),
+            title: `${name} (${f})`,
+            onclick: (e) => {
+              if (on.has(f)) on.delete(f);
+              else on.add(f);
+              e.currentTarget.setAttribute("aria-pressed", String(on.has(f)));
+              run();
+            },
+          },
+          name,
+        ),
+      ),
+    );
+    const test = devEditor(
+      "test string",
+      "4",
+      "text to test the pattern against",
+      "shipped 2024-03, patched 2024-11, first draft 1999-12",
+    );
+    const src = devPanel("test string", test);
+    const view = h("div", { class: "w-dev-code w-rx-view" });
+    const out = devPanel("matches", view);
     const run = () => {
+      const str = test.value.slice(0, 20000);
+      flagText.textContent = [...on].join("");
+      out.panel.classList.remove("err");
+      field.classList.remove("err");
+      pat.removeAttribute("aria-invalid");
+      out.meta.textContent = "";
+      out.panel.querySelector(".w-dev-rows")?.remove();
+      if (!pat.value)
+        return view.replaceChildren(
+          h("span", { class: "w-dev-empty" }, "type a pattern to see matches"),
+        );
+      let re;
       try {
-        const re = new RegExp(pat.value, flags.value);
-        const str = test.value.slice(0, 5000);
-        let html = "",
-          last = 0,
-          m,
-          count = 0;
-        if (flags.value.includes("g")) {
-          m = re.exec(str);
-          while (m && count < 1000) {
-            if (m[0] === "") {
-              re.lastIndex++;
-              m = re.exec(str);
-              continue;
-            }
-            html += `${esc(str.slice(last, m.index))}<mark>${esc(m[0])}</mark>`;
-            last = m.index + m[0].length;
-            count++;
-            m = re.exec(str);
-          }
-        } else {
-          m = re.exec(str);
-          if (m) {
-            html += `${esc(str.slice(0, m.index))}<mark>${esc(m[0])}</mark>`;
-            last = m.index + m[0].length;
-            count = 1;
-          }
-        }
-        html += esc(str.slice(last));
-        out.innerHTML = html;
-        status.textContent = `${count} match${count === 1 ? "" : "es"}`;
-        status.classList.remove("err");
+        re = new RegExp(pat.value, [...on].join(""));
       } catch (e) {
-        out.textContent = test.value.slice(0, 5000);
-        status.textContent = e.message;
-        status.classList.add("err");
+        const msg = e.message.replace(/^.*?: \/.*\/[a-z]*: /s, "");
+        out.panel.classList.add("err");
+        field.classList.add("err");
+        pat.setAttribute("aria-invalid", "true");
+        out.meta.textContent = "invalid pattern";
+        return view.replaceChildren(
+          h(
+            "div",
+            { class: "w-dev-errmsg" },
+            `${msg.charAt(0).toLowerCase()}${msg.slice(1)}`,
+          ),
+        );
       }
+      if (!str)
+        return view.replaceChildren(
+          h(
+            "span",
+            { class: "w-dev-empty" },
+            "add a test string to match against",
+          ),
+        );
+      const found = [];
+      if (on.has("g")) {
+        for (const m of str.matchAll(re)) {
+          found.push(m);
+          if (found.length >= 1000) break;
+        }
+      } else {
+        const m = re.exec(str);
+        if (m) found.push(m);
+      }
+      out.meta.textContent = `${found.length === 1000 ? "1000+" : found.length} match${found.length === 1 ? "" : "es"}`;
+      const names = [];
+      for (const g of pat.value.matchAll(
+        /\\.|\[(?:\\.|[^\]\\])*\]|\((\?<([A-Za-z_$][\w$]*)>|\?)?/g,
+      )) {
+        if (!g[0].startsWith("(")) continue;
+        if (g[2]) names.push(g[2]);
+        else if (!g[1]) names.push(null);
+      }
+      const marked = h("div", { class: "w-rx-text" });
+      let last = 0;
+      found.forEach((m, i) => {
+        marked.append(str.slice(last, m.index));
+        marked.append(
+          h(
+            "mark",
+            { class: m[0] ? `w-rx-hit${i % 2 ? " alt" : ""}` : "w-rx-zero" },
+            m[0],
+          ),
+        );
+        last = m.index + m[0].length;
+      });
+      marked.append(str.slice(last));
+      const LIST = 24;
+      const listed = found.filter((m) => m[0] || m.length > 1);
+      const rows = listed
+        .slice(0, LIST)
+        .flatMap((m, i) => [
+          h(
+            "div",
+            { class: "w-dev-row w-rx-match" },
+            h("span", { class: "w-dev-key" }, `match ${i + 1}`),
+            h("span", { class: "w-dev-val" }, m[0] || "empty"),
+            h("span", { class: "w-dev-aux" }, `at ${m.index}`),
+          ),
+          ...m
+            .slice(1)
+            .map((g, j) =>
+              h(
+                "div",
+                { class: "w-dev-row w-rx-group" },
+                h("span", { class: "w-dev-key" }, names[j] ?? `group ${j + 1}`),
+                h(
+                  "span",
+                  { class: `w-dev-val${g === undefined ? " none" : ""}` },
+                  g === undefined ? "no match" : g || "empty",
+                ),
+                h("span", { class: "w-dev-aux" }),
+              ),
+            ),
+        ]);
+      const more = listed.length - LIST;
+      view.replaceChildren(marked);
+      if (rows.length)
+        out.panel.append(
+          h(
+            "div",
+            { class: "w-dev-rows" },
+            ...rows,
+            more > 0 &&
+              h("div", { class: "w-dev-more" }, `and ${more} more matches`),
+          ),
+        );
     };
-    const esc = (s) =>
-      s.replace(
-        /[&<>]/g,
-        (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
-      );
-    pat.oninput = flags.oninput = test.oninput = run;
+    pat.oninput = test.oninput = run;
     run();
     return card(
       "regex tester",
-      null,
-      h(
-        "div",
-        { class: "w-row w-rx-row" },
-        h("label", { class: "w-label col w-rx-pat" }, "pattern", pat),
-        h("label", { class: "w-label col w-rx-flags" }, "flags", flags),
-      ),
-      h("label", { class: "w-label col" }, "test string", test),
-      status,
-      out,
+      "javascript flavor, runs as you type",
+      field,
+      flags,
+      src.panel,
+      out.panel,
     );
   },
 });
@@ -5677,58 +8367,154 @@ reg({
       q.trim(),
     ),
   build: () => {
-    const input = h(
-      "textarea",
-      {
-        class: "w-textarea",
-        rows: "5",
-        placeholder: "# Hello\n\n**bold** and *italic*\n\n- a list",
-      },
-      "# Hello\n\nsome **bold** and *italic* text.\n\n- one\n- two\n\n`code` and [a link](https://search.tiago.zip)",
+    const input = devEditor(
+      "markdown",
+      "14",
+      "# a heading\n\nsome **bold** text",
+      '# Release notes\n\nThe search page now loads **twice as fast** on phones, and `?q=` links open in a new tab. Read the [full changelog](https://search.tiago.zip).\n\n- faster first paint\n- smaller bundle\n- [x] ship it\n\n> Measured on a Pixel 7 over 4G.\n\n```js\nconst q = new URL(location).searchParams.get("q");\n```',
     );
-    const out = h("div", { class: "w-md-out" });
+    const src = devPanel("markdown", input);
+    const view = h("div", { class: "w-md-out" });
+    const out = devPanel("preview", view, () => view.innerHTML, "copy html");
     const esc = (s) =>
       s.replace(
-        /[&<>]/g,
-        (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+        /[&<>"]/g,
+        (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
       );
-    const md = (src) =>
-      esc(src)
-        .replace(/^### (.*)$/gm, "<h3>$1</h3>")
-        .replace(/^## (.*)$/gm, "<h2>$1</h2>")
-        .replace(/^# (.*)$/gm, "<h1>$1</h1>")
-        .replace(/^\s*[-*] (.*)$/gm, "<li>$1</li>")
-        .replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>")
-        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-        .replace(/`([^`]+)`/g, "<code>$1</code>")
+    const inline = (s) => {
+      const codes = [];
+      return esc(s)
+        .replace(/`([^`]+)`/g, (_, c) => `\uE000${codes.push(c) - 1}\uE001`)
         .replace(
-          /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+          /!?\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
           (_, label, url) =>
-            `<a href="${url.replace(/"/g, "%22")}" rel="noopener" target="_blank">${label}</a>`,
+            `<a href="${url}" rel="noopener noreferrer" target="_blank">${label}</a>`,
         )
-        .replace(/\n{2,}/g, "</p><p>")
-        .replace(/^(?!<[hlu])(.+)$/gm, "$1");
+        .replace(/\*\*(.+?)\*\*|__(.+?)__/g, "<strong>$1$2</strong>")
+        .replace(/\*([^*\s](?:[^*]*[^*\s])?)\*/g, "<em>$1</em>")
+        .replace(/(^|[^\w])_([^_\s](?:[^_]*[^_\s])?)_(?!\w)/g, "$1<em>$2</em>")
+        .replace(/~~(.+?)~~/g, "<del>$1</del>")
+        .replace(/ {2,}\n/g, "<br>")
+        .replace(/\uE000(\d+)\uE001/g, (_, n) => `<code>${codes[n]}</code>`);
+    };
+    const HR = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
+    const LI = /^\s*([-*+]|\d+[.)])\s+/;
+    const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+    const starts = (l) =>
+      /^\s{0,3}(#{1,6}\s|```|~~~|>)/.test(l) || HR.test(l) || LI.test(l);
+    const cells = (l) =>
+      l
+        .trim()
+        .replace(/^\||\|$/g, "")
+        .split("|")
+        .map((c) => inline(c.trim()));
+    const render = (text) => {
+      const lines = text.replace(/\r\n?/g, "\n").split("\n");
+      const html = [];
+      let i = 0;
+      while (i < lines.length) {
+        const line = lines[i];
+        if (!line.trim()) {
+          i++;
+          continue;
+        }
+        const fence = line.match(/^\s{0,3}(```|~~~)/);
+        if (fence) {
+          const body = [];
+          i++;
+          while (i < lines.length && !lines[i].trim().startsWith(fence[1]))
+            body.push(lines[i++]);
+          i++;
+          html.push(`<pre><code>${esc(body.join("\n"))}</code></pre>`);
+          continue;
+        }
+        const head = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/);
+        if (head) {
+          const n = head[1].length;
+          html.push(`<h${n}>${inline(head[2])}</h${n}>`);
+          i++;
+          continue;
+        }
+        if (HR.test(line)) {
+          html.push("<hr>");
+          i++;
+          continue;
+        }
+        if (/^\s{0,3}>/.test(line)) {
+          const body = [];
+          while (i < lines.length && /^\s{0,3}>/.test(lines[i]))
+            body.push(lines[i++].replace(/^\s{0,3}>\s?/, ""));
+          html.push(`<blockquote>${render(body.join("\n"))}</blockquote>`);
+          continue;
+        }
+        if (LI.test(line)) {
+          const ordered = /^\s*\d/.test(line);
+          const first = Number.parseInt(line, 10);
+          const items = [];
+          while (
+            i < lines.length &&
+            LI.test(lines[i]) &&
+            /^\s*\d/.test(lines[i]) === ordered
+          ) {
+            let item = lines[i++].replace(LI, "");
+            while (
+              i < lines.length &&
+              /^\s+\S/.test(lines[i]) &&
+              !LI.test(lines[i])
+            )
+              item += `\n${lines[i++].trim()}`;
+            items.push(item);
+          }
+          const lis = items
+            .map((t) => {
+              const task = t.match(/^\[([ xX])\]\s+([\s\S]*)/);
+              return task
+                ? `<li class="task"><input type="checkbox" disabled${task[1] === " " ? "" : " checked"}><span>${inline(task[2])}</span></li>`
+                : `<li>${inline(t)}</li>`;
+            })
+            .join("");
+          html.push(
+            ordered
+              ? `<ol${first > 1 ? ` start="${first}"` : ""}>${lis}</ol>`
+              : `<ul>${lis}</ul>`,
+          );
+          continue;
+        }
+        if (line.includes("|") && TABLE_RULE.test(lines[i + 1] ?? "")) {
+          const headCells = cells(line);
+          i += 2;
+          const body = [];
+          while (i < lines.length && lines[i].includes("|") && lines[i].trim())
+            body.push(cells(lines[i++]));
+          html.push(
+            `<div class="w-md-table"><table><thead><tr>${headCells.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${body.map((r) => `<tr>${headCells.map((_, j) => `<td>${r[j] ?? ""}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`,
+          );
+          continue;
+        }
+        const para = [line];
+        i++;
+        while (i < lines.length && lines[i].trim() && !starts(lines[i]))
+          para.push(lines[i++]);
+        html.push(`<p>${inline(para.join("\n"))}</p>`);
+      }
+      return html.join("");
+    };
     const run = () => {
-      out.innerHTML = `<p>${md(input.value)}</p>`;
+      const words = input.value.match(/[\p{L}\p{N}'’-]+/gu)?.length ?? 0;
+      src.meta.textContent = `${words} word${words === 1 ? "" : "s"}`;
+      view.innerHTML = render(input.value);
+      out.copy.disabled = !input.value.trim();
+      if (!input.value.trim())
+        view.replaceChildren(
+          h("span", { class: "w-dev-empty" }, "write markdown to preview it"),
+        );
     };
     input.oninput = run;
     run();
     return card(
       "markdown preview",
       null,
-      h(
-        "div",
-        { class: "w-md-split" },
-        h("label", { class: "w-label col" }, "markdown", input),
-        h("div", { class: "w-label col" }, h("span", null, "preview"), out),
-      ),
-      h(
-        "div",
-        { class: "w-btn-row" },
-        copyBtn(() => input.value, "copy markdown"),
-        copyBtn(() => out.innerHTML, "copy html"),
-      ),
+      h("div", { class: "w-md-split" }, src.panel, out.panel),
     );
   },
 });
@@ -5738,17 +8524,43 @@ reg({
   match: (q) => /^(?:ascii(?:\s+table)?|ascii\s+chart)$/i.test(q.trim()),
   build: () => {
     const grid = h("div", { class: "w-ascii" });
-    for (let i = 32; i < 127; i++)
-      grid.append(
+    for (let i = 32; i < 127; i++) {
+      const c = String.fromCharCode(i);
+      const hex = i.toString(16).toUpperCase();
+      const b = h(
+        "button",
+        {
+          class: "w-ascii-cell",
+          type: "button",
+          title: `copy ${i === 32 ? "space" : c}`,
+          "aria-label": `copy ${i === 32 ? "space" : c}, decimal ${i}, hex ${hex}`,
+        },
         h(
-          "div",
-          { class: "w-ascii-cell" },
-          h("span", { class: "w-ascii-char" }, String.fromCharCode(i)),
-          h("span", { class: "w-ascii-dec" }, i),
-          h("span", { class: "w-ascii-hex" }, `0x${i.toString(16)}`),
+          "span",
+          { class: `w-ascii-char${i === 32 ? " sp" : ""}` },
+          i === 32 ? "space" : c,
+        ),
+        h(
+          "span",
+          { class: "w-ascii-codes" },
+          h("span", null, i),
+          h("span", { class: "w-ascii-hex" }, hex),
         ),
       );
-    return card("ascii table", "printable characters 32–126", grid);
+      let t;
+      b.onclick = () => {
+        navigator.clipboard?.writeText(c).catch(() => {});
+        clearTimeout(t);
+        b.classList.add("copied");
+        t = setTimeout(() => b.classList.remove("copied"), 900);
+      };
+      grid.append(b);
+    }
+    return card(
+      "ascii table",
+      "decimal on the left, hex on the right. click to copy",
+      grid,
+    );
   },
 });
 
@@ -5762,45 +8574,56 @@ reg({
   },
   build: ({ ch }) => {
     const cp = ch.codePointAt(0);
-    const point = `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`;
+    const hex = cp.toString(16).toUpperCase();
+    const point = `U+${hex.padStart(4, "0")}`;
+    const kind =
+      [
+        [/\p{Lu}/u, "uppercase letter"],
+        [/\p{Ll}/u, "lowercase letter"],
+        [/\p{L}/u, "letter"],
+        [/\p{N}/u, "number"],
+        [/\p{P}/u, "punctuation"],
+        [/\p{Sc}/u, "currency symbol"],
+        [/\p{Sm}/u, "math symbol"],
+        [/\p{S}/u, "symbol"],
+        [/\p{Z}/u, "space"],
+        [/\p{M}/u, "combining mark"],
+      ].find(([re]) => re.test(ch))?.[1] ?? "control or other";
     return card(
       "character info",
-      point,
-      h("div", { class: "w-char-hero" }, ch),
+      null,
       h(
         "div",
-        { class: "w-calc-out w-charinfo" },
-        ...[
-          ["character", ch, true],
-          ["code point", point, true],
-          ["decimal", cp, false],
-          ["html entity", `&#${cp};`, true],
-          [
-            "utf-8 bytes",
-            [...new TextEncoder().encode(ch)]
-              .map((b) => b.toString(16))
-              .join(" "),
-            true,
-          ],
-        ].map(([l, v, mono]) =>
-          h(
-            "div",
-            { class: "w-stat" },
-            h("span", { class: "w-stat-label" }, l),
-            h(
-              "span",
-              { class: "w-row" },
-              h("span", { class: `w-stat-val${mono ? " w-mono" : ""}` }, v),
-              copyBtn(() => String(v)),
-            ),
-          ),
+        { class: "w-char" },
+        h("div", { class: "w-char-glyph", "aria-hidden": "true" }, ch),
+        h(
+          "div",
+          { class: "w-char-meta" },
+          h("div", { class: "w-char-point w-mono" }, point),
+          h("div", { class: "w-focal-cap" }, kind),
         ),
+        copyBtn(() => ch, "copy character"),
+      ),
+      kvList(
+        [
+          ["decimal", cp],
+          ["html", `&#x${hex};`],
+          ["css", `\\${hex}`],
+          [
+            "javascript",
+            cp > 0xffff ? `\\u{${hex}}` : `\\u${hex.padStart(4, "0")}`,
+          ],
+          [
+            "utf-8",
+            [...new TextEncoder().encode(ch)]
+              .map((b) => b.toString(16).toUpperCase().padStart(2, "0"))
+              .join(" "),
+          ],
+        ].map(([l, v]) => [l, v, { mono: true, copy: true }]),
       ),
     );
   },
 });
-
-////// wave 2: emoji, cron, viz, games, reference //////////////////////////////
 
 const EMOJI = [
   ["😀", "grin happy smile face"],
@@ -5965,9 +8788,9 @@ reg({
     const grid = h("div", { class: "w-emoji-grid" });
     const run = () => {
       const t = input.value.trim().toLowerCase();
-      const list = (
-        t ? EMOJI.filter(([c, k]) => k.includes(t) || c === t) : EMOJI
-      ).slice(0, 72);
+      const list = t
+        ? EMOJI.filter(([c, k]) => k.includes(t) || c === t)
+        : EMOJI;
       grid.replaceChildren();
       if (!list.length) {
         const reset = h(
@@ -6000,10 +8823,14 @@ reg({
           },
           c,
         );
+        let t;
         b.onclick = () => {
           navigator.clipboard?.writeText(c);
+          clearTimeout(t);
+          b.classList.remove("copied");
+          b.offsetWidth;
           b.classList.add("copied");
-          setTimeout(() => b.classList.remove("copied"), 600);
+          t = setTimeout(() => b.classList.remove("copied"), 900);
         };
         grid.append(b);
       }
@@ -6048,17 +8875,21 @@ reg({
       const b = h(
         "button",
         {
-          class: "w-kaomoji",
+          class: `w-kaomoji${[...k].length > 11 ? " wide" : ""}`,
           type: "button",
           title: "copy",
-          "aria-label": "copy kaomoji",
+          "aria-label": `copy ${k}`,
         },
         k,
       );
+      let t;
       b.onclick = () => {
         navigator.clipboard?.writeText(k);
+        clearTimeout(t);
+        b.classList.remove("copied");
+        b.offsetWidth;
         b.classList.add("copied");
-        setTimeout(() => b.classList.remove("copied"), 600);
+        t = setTimeout(() => b.classList.remove("copied"), 900);
       };
       grid.append(b);
     }
@@ -6078,107 +8909,309 @@ reg({
     return null;
   },
   build: ({ expr }) => {
-    const input = h("input", { class: "w-input w-mono", value: expr });
-    const desc = h("div", { class: "w-cron-desc", "aria-live": "polite" });
-    const next = h("div", { class: "w-calc-out" });
-    const say = (text, bad) => {
-      desc.textContent = text;
-      desc.classList.toggle("err", !!bad);
-    };
     const FIELDS = [
       ["minute", 0, 59],
       ["hour", 0, 23],
-      ["day of month", 1, 31],
+      ["day", 1, 31],
       ["month", 1, 12],
-      ["day of week", 0, 6],
+      ["weekday", 0, 7],
     ];
-    const parseField = (f, lo, hi) => {
+    const MONTHS = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+    const DAYS = [
+      "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+      "Sunday",
+    ];
+    const MACROS = {
+      "@yearly": "0 0 1 1 *",
+      "@annually": "0 0 1 1 *",
+      "@monthly": "0 0 1 * *",
+      "@weekly": "0 0 * * 0",
+      "@daily": "0 0 * * *",
+      "@midnight": "0 0 * * *",
+      "@hourly": "0 * * * *",
+    };
+    const input = h("input", {
+      class: "w-input w-cron-input",
+      value: expr,
+      spellcheck: "false",
+      autocapitalize: "off",
+      autocomplete: "off",
+      "aria-label": "cron expression",
+      "aria-describedby": "",
+    });
+    const desc = h("div", { class: "w-cron-desc", role: "status" });
+    const legend = h("div", { class: "w-cron-fields", "aria-hidden": "true" });
+    const list = h("div", { class: "w-dev-rows w-cron-runs" });
+    const out = devPanel("next runs", list);
+    out.meta.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const num = (s, i) => {
+      const names = i === 3 ? MONTHS : i === 4 ? DAYS : null;
+      const byName = names?.findIndex(
+        (n) => n.slice(0, 3).toLowerCase() === s.toLowerCase(),
+      );
+      if (byName >= 0) return byName + (i === 3 ? 1 : 0);
+      if (!/^\d+$/.test(s))
+        throw { i, msg: `"${s}" isn't a valid ${FIELDS[i][0]}` };
+      return +s;
+    };
+    const parse = (f, i) => {
+      const [name, lo, hi] = FIELDS[i];
       const set = new Set();
       for (const part of f.split(",")) {
-        const [range, stepRaw] = part.split("/");
-        const step = stepRaw ? +stepRaw : 1;
-        let a, b;
-        if (range === "*") {
-          a = lo;
-          b = hi;
-        } else if (range.includes("-")) {
-          const [x, y] = range.split("-").map(Number);
-          a = x;
-          b = y;
-        } else {
-          a = b = +range;
-        }
-        if (!Number.isFinite(a) || !Number.isFinite(b)) throw new Error("bad");
-        for (let i = a; i <= b; i += step) if (i >= lo && i <= hi) set.add(i);
+        const m = part.match(/^(\*|\w+(?:-\w+)?)(?:\/(\d+))?$/);
+        if (!m) throw { i, msg: `"${part}" isn't a valid ${name} value` };
+        const step = m[2] ? +m[2] : 1;
+        if (!step) throw { i, msg: "a step of 0 never runs" };
+        const [a, b = m[2] ? hi : a] =
+          m[1] === "*" ? [lo, hi] : m[1].split("-").map((v) => num(v, i));
+        if (a < lo || b > hi)
+          throw {
+            i,
+            msg: `${name} must be between ${lo} and ${i === 4 ? 6 : hi}`,
+          };
+        if (a > b) throw { i, msg: `${name} range ${a}-${b} runs backwards` };
+        for (let v = a; v <= b; v += step) set.add(i === 4 ? v % 7 : v);
       }
       return set;
     };
-    const run = () => {
-      const parts = input.value.trim().split(/\s+/);
-      if (parts.length !== 5) {
-        say("needs 5 fields: minute, hour, day, month, weekday", true);
-        next.replaceChildren();
-        return;
-      }
-      let sets;
-      try {
-        sets = FIELDS.map(([, lo, hi], i) => parseField(parts[i], lo, hi));
-      } catch {
-        say("that expression doesn't parse yet", true);
-        next.replaceChildren();
-        return;
-      }
-      const human = parts
-        .map((p, i) => (p === "*" ? null : `${FIELDS[i][0]} ${p}`))
+    const joinAnd = (xs) =>
+      xs.length < 2
+        ? xs.join("")
+        : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;
+    const words = (token, fmt) =>
+      joinAnd(
+        token.split(",").map((part) => {
+          const [range, step] = part.split("/");
+          const span =
+            range === "*"
+              ? ""
+              : range.includes("-")
+                ? range
+                    .split("-")
+                    .map((v) => fmt(v))
+                    .join(" to ")
+                : fmt(range);
+          if (!step) return span;
+          return `every ${step}${span ? ` from ${span}` : ""}`;
+        }),
+      );
+    const clock = (hr, min) =>
+      hr === 0 && min === 0
+        ? "midnight"
+        : hr === 12 && min === 0
+          ? "noon"
+          : new Date(2000, 0, 1, hr, min)
+              .toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+              })
+              .replace(/\s/g, "\u00a0");
+    const ordinal = (v) => {
+      const n = +v;
+      const tail =
+        n % 100 >= 11 && n % 100 <= 13
+          ? "th"
+          : (["th", "st", "nd", "rd"][n % 10] ?? "th");
+      return `${n}${tail}`;
+    };
+    const describe = (p, S) => {
+      const [mi, hr, dom, mon, dow] = p;
+      const plain = (t) => /^\d+(,\d+)*$/.test(t);
+      const every = (t) => t.match(/^\*\/(\d+)$/)?.[1];
+      const hourRange = hr.match(/^(\d+)-(\d+)$/);
+      const mins = [...S[0]].sort((x, y) => x - y);
+      const fixed = plain(mi) && plain(hr) && S[0].size * S[1].size <= 6;
+      let time;
+      if (mi === "*" && hr === "*") time = "every minute";
+      else if (every(mi) && hr === "*") time = `every ${every(mi)} minutes`;
+      else if (fixed)
+        time = `at ${joinAnd(
+          [...S[1]]
+            .sort((x, y) => x - y)
+            .flatMap((x) => mins.map((y) => clock(x, y))),
+        )}`;
+      else if (plain(mi) && S[0].size === 1 && hr === "*")
+        time = mins[0]
+          ? `at ${mins[0]} minutes past every hour`
+          : "every hour, on the hour";
+      else if (plain(mi) && S[0].size === 1 && every(hr))
+        time = `every ${every(hr)} hours${mins[0] ? `, ${mins[0]} minutes past` : ""}`;
+      else if ((mi === "*" || every(mi)) && hourRange)
+        time = `every ${every(mi) ? `${every(mi)} minutes` : "minute"} from ${clock(+hourRange[1], 0)} to ${clock(+hourRange[2], mins.at(-1))}`;
+      else
+        time = `${mi === "*" ? "every minute" : `at minute ${words(mi, String)}`}${hr === "*" ? "" : `, during hour ${words(hr, String)}`}`;
+      const dayName = (v) => DAYS[num(v, 4)];
+      const weekdays = [...S[4]].sort().join();
+      const days = [
+        dom !== "*" &&
+          (every(dom)
+            ? `every ${every(dom)} days`
+            : `on the ${words(dom, ordinal)} of the month`),
+        dow !== "*" &&
+          (weekdays === "1,2,3,4,5"
+            ? "on weekdays"
+            : weekdays === "0,6"
+              ? "on weekends"
+              : `on ${words(dow, dayName)}`),
+      ]
         .filter(Boolean)
-        .join(", ");
-      say(human ? `runs at ${human}` : "runs every minute", false);
+        .join(" or ");
+      const months =
+        mon === "*" ? "" : `in ${words(mon, (v) => MONTHS[num(v, 3) - 1])}`;
+      if (/^\d+$/.test(dom) && /^\w+$/.test(mon) && dow === "*")
+        return `${time} on ${MONTHS[num(mon, 3) - 1]} ${ordinal(dom)}`;
+      if (!days && !months && fixed) return `every day ${time}`;
+      return [time, days, months].filter(Boolean).join(" ");
+    };
+    let fields = [];
+    let bad = -1;
+    const paintLegend = () => {
+      const caret = input.selectionStart ?? -1;
+      const before = input.value.slice(0, caret).trimStart();
+      const active =
+        document.activeElement === input ? before.split(/\s+/).length - 1 : -1;
+      legend.replaceChildren(
+        ...FIELDS.map(([name], i) =>
+          h(
+            "div",
+            {
+              class: `w-cron-field${i === bad ? " bad" : ""}${i === active ? " on" : ""}`,
+            },
+            h("span", { class: "w-cron-token" }, fields[i] ?? ""),
+            h("span", { class: "w-cron-name" }, name),
+          ),
+        ),
+      );
+    };
+    const fail = (msg) => {
+      desc.textContent = msg;
+      desc.classList.add("err");
+      input.setAttribute("aria-invalid", "true");
+      out.panel.hidden = true;
+    };
+    const run = () => {
+      const raw = input.value.trim();
+      const parts = (MACROS[raw.toLowerCase()] ?? raw)
+        .split(/\s+/)
+        .filter(Boolean);
+      fields = raw.startsWith("@") ? parts : raw.split(/\s+/);
+      bad = -1;
+      desc.classList.remove("err");
+      input.removeAttribute("aria-invalid");
+      out.panel.hidden = false;
+      if (parts.length !== 5) {
+        bad = parts.length > 5 ? 5 : parts.length;
+        paintLegend();
+        return fail(
+          parts.length > 5
+            ? `too many fields: cron uses 5, this has ${parts.length}`
+            : `missing the ${FIELDS[parts.length][0]} field. cron uses 5 fields`,
+        );
+      }
+      let S;
+      try {
+        S = parts.map((p, i) => parse(p, i));
+      } catch (e) {
+        bad = e.i ?? -1;
+        paintLegend();
+        return fail(e.msg ?? "that expression doesn't parse");
+      }
+      paintLegend();
+      desc.textContent = describe(parts, S);
+      const domR = parts[2] !== "*";
+      const dowR = parts[4] !== "*";
       const runs = [];
       const d = new Date();
       d.setSeconds(0, 0);
       d.setMinutes(d.getMinutes() + 1);
-      const domRestricted = parts[2] !== "*";
-      const dowRestricted = parts[4] !== "*";
-      for (let i = 0; i < 366 * 24 * 60 && runs.length < 5; i++) {
-        const dom = sets[2].has(d.getDate());
-        const dow = sets[4].has(d.getDay());
-        // POSIX: when both day fields are restricted, match either
-        const dayOk = domRestricted && dowRestricted ? dom || dow : dom && dow;
-        if (
-          sets[0].has(d.getMinutes()) &&
-          sets[1].has(d.getHours()) &&
-          sets[3].has(d.getMonth() + 1) &&
-          dayOk
-        )
-          runs.push(new Date(d));
-        d.setMinutes(d.getMinutes() + 1);
+      const end = d.getTime() + 5 * 366 * 864e5;
+      while (runs.length < 5 && d.getTime() < end) {
+        if (!S[3].has(d.getMonth() + 1)) {
+          d.setMonth(d.getMonth() + 1, 1);
+          d.setHours(0, 0, 0, 0);
+          continue;
+        }
+        const dom = S[2].has(d.getDate());
+        const dow = S[4].has(d.getDay());
+        if (!(domR && dowR ? dom || dow : dom && dow)) {
+          d.setDate(d.getDate() + 1);
+          d.setHours(0, 0, 0, 0);
+          continue;
+        }
+        if (!S[1].has(d.getHours())) {
+          d.setHours(d.getHours() + 1, 0, 0, 0);
+          continue;
+        }
+        if (!S[0].has(d.getMinutes())) {
+          d.setMinutes(d.getMinutes() + 1, 0, 0);
+          continue;
+        }
+        runs.push(new Date(d));
+        d.setMinutes(d.getMinutes() + 1, 0, 0);
       }
-      next.replaceChildren(
+      const now = Date.now();
+      if (!runs.length)
+        return list.replaceChildren(
+          h("div", { class: "w-dev-more" }, "never runs in the next 5 years"),
+        );
+      const soon = (ms) => {
+        const mins = Math.ceil(ms / 60000);
+        if (mins >= 2880) return devRel(ms);
+        const hrs = Math.floor(mins / 60);
+        return `in ${hrs ? `${hrs}h ` : ""}${mins % 60}m`;
+      };
+      list.replaceChildren(
         ...runs.map((r, i) =>
           h(
             "div",
-            { class: "w-stat" },
+            { class: "w-dev-row w-cron-run" },
             h(
               "span",
-              { class: "w-stat-label" },
-              i === 0 ? "next run" : `run ${i + 1}`,
+              { class: "w-dev-key" },
+              i && r.toDateString() === runs[i - 1].toDateString()
+                ? ""
+                : r.toLocaleDateString(undefined, {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                    ...(r.getFullYear() === new Date().getFullYear()
+                      ? {}
+                      : { year: "numeric" }),
+                  }),
             ),
-            h("span", { class: "w-stat-val" }, r.toLocaleString()),
+            h(
+              "span",
+              { class: "w-dev-val" },
+              r.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+            ),
+            h("span", { class: "w-dev-aux" }, soon(r - now)),
           ),
         ),
       );
-      if (!runs.length)
-        next.append(h("div", { class: "w-note" }, "no run within a year"));
     };
     input.oninput = run;
+    input.onkeyup = input.onclick = input.onfocus = input.onblur = paintLegend;
     run();
-    return card(
-      "cron expression",
-      null,
-      h("label", { class: "w-label col" }, "expression", input),
-      desc,
-      next,
-    );
+    return card("cron expression", null, desc, input, legend, out.panel);
   },
 });
 
@@ -6191,25 +9224,29 @@ reg({
   build: () => {
     const N = 28;
     let arr = [];
-    let running = false;
-    const bars = h("div", { class: "w-sort-bars" });
-    const sel = h(
-      "select",
-      { class: "w-select" },
-      ...["bubble", "insertion", "selection", "quick"].map((s) =>
-        h("option", { value: s }, s),
+    let run = 0;
+    let algo = "bubble";
+    const bars = h("div", { class: "w-sort-bars", "aria-hidden": "true" });
+    const cmpS = gameStat("comparisons");
+    const swapS = gameStat("swaps");
+    const legend = h(
+      "div",
+      { class: "w-sort-legend", "aria-hidden": "true" },
+      h("span", { class: "cmp" }, "comparing"),
+      h("span", { class: "swp" }, "swapping"),
+    );
+    const bar = gameBar([cmpS, swapS], legend);
+    const live = h("div", { class: "w-sr", role: "status" });
+    bars.replaceChildren(
+      ...Array.from({ length: N }, (_, i) =>
+        h("div", { class: "w-sort-bar", style: `--i: ${i}` }),
       ),
     );
-    bars.replaceChildren(
-      ...Array.from({ length: N }, () => h("div", { class: "w-sort-bar" })),
-    );
-    const draw = (a = -1, b = -1, done = 0) => {
-      [...bars.children].forEach((bar, i) => {
-        bar.style.height = `${arr[i]}%`;
-        bar.className =
-          "w-sort-bar" +
-          (i === a || i === b ? " active" : "") +
-          (i < done ? " done" : "");
+    const draw = (a = -1, b = -1, swap = false) => {
+      [...bars.children].forEach((el, i) => {
+        el.style.height = `${arr[i]}%`;
+        const hit = i === a || i === b;
+        el.className = `w-sort-bar${hit ? (swap ? " swap" : " active") : ""}`;
       });
     };
     const randomize = () => {
@@ -6217,7 +9254,7 @@ reg({
       draw();
     };
     const steps = [];
-    const rec = (a, b) => steps.push([arr.slice(), a, b]);
+    const rec = (a, b, swap = false) => steps.push([arr.slice(), a, b, swap]);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const algos = {
       bubble: () => {
@@ -6226,16 +9263,18 @@ reg({
             rec(j, j + 1);
             if (arr[j] > arr[j + 1]) {
               [arr[j], arr[j + 1]] = [arr[j + 1], arr[j]];
-              rec(j, j + 1);
+              rec(j, j + 1, true);
             }
           }
       },
       insertion: () => {
         for (let i = 1; i < N; i++) {
           let j = i;
-          while (j > 0 && arr[j - 1] > arr[j]) {
+          while (j > 0) {
             rec(j - 1, j);
+            if (arr[j - 1] <= arr[j]) break;
             [arr[j - 1], arr[j]] = [arr[j], arr[j - 1]];
+            rec(j - 1, j, true);
             j--;
           }
         }
@@ -6244,12 +9283,12 @@ reg({
         for (let i = 0; i < N; i++) {
           let mn = i;
           for (let j = i + 1; j < N; j++) {
-            rec(i, j);
+            rec(mn, j);
             if (arr[j] < arr[mn]) mn = j;
           }
           if (mn !== i) {
             [arr[i], arr[mn]] = [arr[mn], arr[i]];
-            rec(i, mn);
+            rec(i, mn, true);
           }
         }
       },
@@ -6262,64 +9301,100 @@ reg({
             rec(j, hi);
             if (arr[j] < p) {
               [arr[i], arr[j]] = [arr[j], arr[i]];
+              if (i !== j) rec(i, j, true);
               i++;
             }
           }
           [arr[i], arr[hi]] = [arr[hi], arr[i]];
-          rec(i, hi);
+          if (i !== hi) rec(i, hi, true);
           qs(lo, i - 1);
           qs(i + 1, hi);
         };
         qs(0, N - 1);
       },
     };
-    const run = async () => {
-      if (running) return;
-      running = true;
+    const sortBtn = h(
+      "button",
+      { class: "w-btn primary w-sort-go", type: "button" },
+      "sort",
+    );
+    const counts = (c = 0, s = 0) => {
+      cmpS.set(c);
+      swapS.set(s);
+    };
+    const stop = () => {
+      run++;
+      sortBtn.textContent = "sort";
+      bars.classList.remove("sorted", "running");
+      draw();
+    };
+    sortBtn.onclick = async () => {
+      if (sortBtn.textContent === "stop") return stop();
+      const id = ++run;
+      sortBtn.textContent = "stop";
+      bars.classList.remove("sorted");
+      bars.classList.add("running");
       const snapshot = arr.slice();
       steps.length = 0;
-      algos[sel.value]();
+      algos[algo]();
       const sorted = arr.slice();
       arr = snapshot;
-      for (const [state, a, b] of steps) {
-        if (!bars.isConnected) {
-          running = false;
-          return;
-        }
+      let swaps = 0;
+      let cmps = 0;
+      for (const [state, a, b, swap] of steps) {
+        if (id !== run || !bars.isConnected) return;
         arr = state;
-        draw(a, b);
-        await sleep(26);
+        if (swap) swaps++;
+        else cmps++;
+        draw(a, b, swap);
+        counts(cmps, swaps);
+        await sleep(algo === "quick" ? 40 : 22);
       }
+      if (id !== run) return;
       arr = sorted;
-      for (let i = 0; i <= N; i++) {
-        if (!bars.isConnected) break;
-        draw(-1, -1, i);
-        await sleep(14);
-      }
-      running = false;
+      draw();
+      bars.classList.remove("running");
+      bars.classList.add("sorted");
+      live.textContent = `${algo} sort finished with ${cmps} comparisons and ${swaps} swaps`;
+      sortBtn.textContent = "sort";
     };
+    const shuffle = h(
+      "button",
+      {
+        class: "w-btn",
+        type: "button",
+        onclick: () => {
+          if (sortBtn.textContent === "stop") stop();
+          bars.classList.remove("sorted");
+          randomize();
+          counts();
+        },
+      },
+      "shuffle",
+    );
+    const pick = segmented(
+      "algorithm",
+      ["bubble", "insertion", "selection", "quick"],
+      algo,
+      (v) => {
+        algo = v;
+        if (sortBtn.textContent === "stop") stop();
+        if (bars.classList.contains("sorted")) {
+          bars.classList.remove("sorted");
+          randomize();
+        }
+        counts();
+      },
+    );
     randomize();
     return card(
       "sorting visualizer",
       null,
+      bar,
       bars,
-      h(
-        "div",
-        { class: "w-row" },
-        h("label", { class: "w-label" }, "algorithm", sel),
-      ),
-      h(
-        "div",
-        { class: "w-btn-row" },
-        h("button", { class: "w-btn primary", html: "sort", onclick: run }),
-        h("button", {
-          class: "w-btn",
-          html: "shuffle",
-          onclick: () => {
-            if (!running) randomize();
-          },
-        }),
-      ),
+      live,
+      pick,
+      h("div", { class: "w-btn-row" }, sortBtn, shuffle),
     );
   },
 });
@@ -6328,23 +9403,52 @@ reg({
   id: "snake",
   match: (q) => /^(?:play\s+)?snake(?:\s+game)?$/i.test(q.trim()),
   build: () => {
-    const SIZE = 17,
-      CELL = 16;
+    const SIZE = 17;
+    const CELL = 20;
+    const STEP = 110;
+    const px = SIZE * CELL;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
     const canvas = h("canvas", {
       class: "w-game-canvas",
-      width: SIZE * CELL,
-      height: SIZE * CELL,
+      width: px * dpr,
+      height: px * dpr,
+      style: { width: `${px}px` },
+      "aria-label": "snake board",
+      role: "img",
     });
     const ctx = canvas.getContext("2d");
-    const theme = getComputedStyle(document.documentElement);
-    const tok = (name) => theme.getPropertyValue(name).trim();
-    const scoreEl = h("div", { class: "w-sub w-game-score" }, "score: 0");
-    const wrap = h("div", { class: "w-game", tabindex: "0" }, canvas);
-    let snake, dir, nextDir, food, score, iv, dead;
+    ctx.scale(dpr, dpr);
+    const scoreS = gameStat("score");
     let best = +(localStorage.getItem("w-snake-best") || 0);
+    const bestS = gameStat("best", String(best));
+    const overTitle = h("div", { class: "w-game-over-title" }, "snake");
+    const overSub = h(
+      "div",
+      { class: "w-game-over-sub" },
+      "use the arrow keys or swipe to steer",
+    );
+    const overBtn = h(
+      "button",
+      { class: "w-btn primary", type: "button" },
+      "start",
+    );
+    const over = h(
+      "div",
+      { class: "w-game-over show" },
+      h("div", { class: "w-game-over-card" }, overTitle, overSub, overBtn),
+    );
+    const wrap = h(
+      "div",
+      { class: "w-game", tabindex: "0", "aria-label": "snake game" },
+      canvas,
+      over,
+    );
+    let snake, prev, queue, dir, food, foodAt, score, dead, raf, last;
+    let playing = false;
+    let colors = {};
     const showScore = () => {
-      scoreEl.textContent = `score: ${score}${best ? ` · best: ${best}` : ""}`;
-      scoreEl.className = "w-sub w-game-score";
+      scoreS.set(score);
+      bestS.set(best);
     };
     const spawn = () => {
       let p;
@@ -6354,78 +9458,168 @@ reg({
           Math.floor(Math.random() * SIZE),
         ];
       } while (snake?.some((s) => s[0] === p[0] && s[1] === p[1]));
+      foodAt = performance.now();
       return p;
     };
     const reset = () => {
-      snake = [[8, 8]];
+      snake = [
+        [8, 8],
+        [7, 8],
+        [6, 8],
+      ];
+      prev = snake.map((s) => s.slice());
       dir = [1, 0];
-      nextDir = [1, 0];
+      queue = [];
       food = spawn();
       score = 0;
       dead = false;
       showScore();
     };
-    const draw = () => {
-      ctx.fillStyle = tok("--bg");
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = tok("--red");
-      ctx.fillRect(food[0] * CELL + 2, food[1] * CELL + 2, CELL - 4, CELL - 4);
-      ctx.fillStyle = tok("--green");
-      snake.forEach((s, i) => {
-        ctx.globalAlpha = i === 0 ? 1 : 0.72;
-        ctx.fillRect(s[0] * CELL + 1, s[1] * CELL + 1, CELL - 2, CELL - 2);
-      });
+    const draw = (t, now) => {
+      const c = colors;
+      ctx.fillStyle = c.bg;
+      ctx.fillRect(0, 0, px, px);
+      ctx.fillStyle = c.grid;
+      ctx.globalAlpha = 0.32;
+      for (let y = 0; y < SIZE; y++)
+        for (let x = (y % 2) ^ 1; x < SIZE; x += 2)
+          ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
       ctx.globalAlpha = 1;
+      const grow = Math.min(1, Math.max(0, (now - foodAt) / 220));
+      const pulse = 1 + Math.sin(now / 260) * 0.06;
+      const fr = (CELL / 2 - 3) * (1 - (1 - grow) ** 3) * pulse;
+      ctx.fillStyle = c.red;
+      ctx.beginPath();
+      ctx.arc(
+        food[0] * CELL + CELL / 2,
+        food[1] * CELL + CELL / 2,
+        Math.max(0, fr),
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
+      const lerp = (a, b) => [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+      ];
+      const pts = [
+        lerp(prev[0], snake[0]),
+        ...snake.slice(1),
+        lerp(prev[prev.length - 1], snake[snake.length - 1]),
+      ].map(([x, y]) => [x * CELL + CELL / 2, y * CELL + CELL / 2]);
+      ctx.strokeStyle = c.green;
+      ctx.lineWidth = CELL - 4;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.globalAlpha = 0.78;
+      ctx.beginPath();
+      ctx.moveTo(...pts[0]);
+      for (const p of pts.slice(1)) ctx.lineTo(...p);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      const [hx, hy] = pts[0];
+      ctx.fillStyle = c.green;
+      ctx.beginPath();
+      ctx.arc(hx, hy, CELL / 2 - 1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = c.bg;
+      const [dx, dy] = dir;
+      for (const side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.arc(
+          hx + dx * 3 + -dy * side * 4,
+          hy + dy * 3 + dx * side * 4,
+          2,
+          0,
+          Math.PI * 2,
+        );
+        ctx.fill();
+      }
     };
     const tick = () => {
-      dir = nextDir;
+      if (queue.length) dir = queue.shift();
       const head = [snake[0][0] + dir[0], snake[0][1] + dir[1]];
+      const body = snake.slice(0, -1);
       if (
         head[0] < 0 ||
         head[1] < 0 ||
         head[0] >= SIZE ||
         head[1] >= SIZE ||
-        snake.some((s) => s[0] === head[0] && s[1] === head[1])
+        body.some((s) => s[0] === head[0] && s[1] === head[1])
       ) {
         dead = true;
-        clearInterval(iv);
-        iv = null;
-        if (score > best) {
-          best = score;
-          localStorage.setItem("w-snake-best", best);
-          showScore();
-        }
-        ctx.fillStyle = "rgb(0 0 0 / 0.62)";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = tok("--text");
-        ctx.font = "620 15px InterVar, system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(
-          "game over · press space",
-          canvas.width / 2,
-          canvas.height / 2,
-        );
-        scoreEl.className = "w-sub w-game-score over";
         return;
       }
+      prev = snake.map((s) => s.slice());
       snake.unshift(head);
       if (head[0] === food[0] && head[1] === food[1]) {
         score++;
         showScore();
+        scoreS.el.classList.remove("bump");
+        void scoreS.el.offsetWidth;
+        scoreS.el.classList.add("bump");
         food = spawn();
       } else snake.pop();
-      draw();
+    };
+    const die = () => {
+      playing = false;
+      prev = snake.map((s) => s.slice());
+      const fresh = score > best;
+      if (fresh) {
+        best = score;
+        localStorage.setItem("w-snake-best", best);
+      }
+      showScore();
+      overTitle.textContent = fresh ? "new best" : "game over";
+      overSub.textContent = `you scored ${score}${fresh || !best ? "" : `, best is ${best}`}`;
+      overBtn.textContent = "play again";
+      over.classList.add("show");
+      wrap.classList.remove("hit");
+      void wrap.offsetWidth;
+      wrap.classList.add("hit");
+    };
+    const frame = (now) => {
+      if (!canvas.isConnected) {
+        playing = false;
+        return;
+      }
+      if (!playing) return;
+      if (now - last > STEP * 4) last = now - STEP;
+      while (now - last >= STEP && !dead) {
+        last += STEP;
+        tick();
+      }
+      draw(dead ? 1 : Math.min(1, (now - last) / STEP), now);
+      if (dead) return die();
+      raf = requestAnimationFrame(frame);
+    };
+    const readColors = () => {
+      const theme = getComputedStyle(document.documentElement);
+      const tok = (name) => theme.getPropertyValue(name).trim();
+      colors = {
+        bg: tok("--bg"),
+        grid: tok("--surface0"),
+        green: tok("--green"),
+        red: tok("--red"),
+      };
     };
     const start = () => {
-      if (iv) return;
+      if (playing) return;
+      cancelAnimationFrame(raf);
+      readColors();
       reset();
-      draw();
-      iv = setInterval(tick, 110);
+      over.classList.remove("show");
+      wrap.classList.remove("hit");
+      playing = true;
+      last = performance.now();
+      raf = requestAnimationFrame(frame);
     };
     const setDir = (nd) => {
-      if (!(nd[0] === -dir[0] && nd[1] === -dir[1])) nextDir = nd;
-      if (!iv && !dead) start();
+      if (!playing) start();
+      const tail = queue.at(-1) || dir;
+      if (nd[0] === -tail[0] && nd[1] === -tail[1]) return;
+      if (nd[0] === tail[0] && nd[1] === tail[1]) return;
+      if (queue.length < 2) queue.push(nd);
     };
     wrap.addEventListener("keydown", (e) => {
       const map = {
@@ -6438,12 +9632,16 @@ reg({
         a: [-1, 0],
         d: [1, 0],
       };
-      if (map[e.key]) {
-        setDir(map[e.key]);
+      const nd = map[e.key] || map[e.key.toLowerCase?.()];
+      if (nd) {
+        setDir(nd);
         e.preventDefault();
         e.stopPropagation();
-      } else if (e.key === " ") {
-        if (dead || !iv) start();
+        return;
+      }
+      if (e.key === " " || e.key === "Enter") {
+        if (e.target === overBtn) return;
+        start();
         e.preventDefault();
         e.stopPropagation();
       }
@@ -6467,26 +9665,22 @@ reg({
       );
       e.preventDefault();
     });
-    wrap.onclick = () => wrap.focus();
+    overBtn.onclick = (e) => {
+      e.stopPropagation();
+      wrap.focus({ preventScroll: true });
+      start();
+    };
+    wrap.onclick = () => wrap.focus({ preventScroll: true });
+    readColors();
     reset();
-    draw();
+    requestAnimationFrame((now) => {
+      foodAt = now - 1000;
+      draw(1, now);
+    });
     return card(
       "snake",
-      "arrow keys / wasd · or swipe on mobile",
-      wrap,
-      scoreEl,
-      h(
-        "div",
-        { class: "w-btn-row" },
-        h("button", {
-          class: "w-btn primary",
-          html: "start",
-          onclick: () => {
-            wrap.focus();
-            start();
-          },
-        }),
-      ),
+      "arrow keys or wasd to steer, swipe on touch screens",
+      h("div", { class: "w-game-col" }, gameBar([scoreS, bestS]), wrap),
     );
   },
 });
@@ -6495,91 +9689,209 @@ reg({
   id: "2048",
   match: (q) => /^(?:play\s+)?2048(?:\s+game)?$/i.test(q.trim()),
   build: () => {
-    let grid, score, spawned;
-    const board = h("div", { class: "w-2048" });
-    const scoreEl = h("div", { class: "w-sub w-game-score" }, "score: 0");
-    const wrap = h("div", { class: "w-game", tabindex: "0" }, board);
-    const emptyCells = () => {
-      const c = [];
-      for (let r = 0; r < 4; r++)
-        for (let q = 0; q < 4; q++) if (!grid[r][q]) c.push([r, q]);
-      return c;
+    const SLIDE = 130;
+    let grid, score, won, uid;
+    let best = +(localStorage.getItem("w-2048-best") || 0);
+    let doomed = [];
+    const layer = h("div", { class: "w-2048-tiles" });
+    const board = h(
+      "div",
+      { class: "w-2048" },
+      ...Array.from({ length: 16 }, () => h("div", { class: "w-2048-cell" })),
+      layer,
+    );
+    const scoreS = gameStat("score");
+    const bestS = gameStat("best", String(best));
+    const newBtn = h(
+      "button",
+      { class: "w-btn w-game-new", type: "button" },
+      "new game",
+    );
+    const overTitle = h("div", { class: "w-game-over-title" });
+    const overSub = h("div", { class: "w-game-over-sub" });
+    const overBtn = h("button", { class: "w-btn primary", type: "button" });
+    const over = h(
+      "div",
+      { class: "w-game-over" },
+      h("div", { class: "w-game-over-card" }, overTitle, overSub, overBtn),
+    );
+    const wrap = h(
+      "div",
+      { class: "w-game", tabindex: "0", "aria-label": "2048 board" },
+      board,
+      over,
+    );
+    const place = (t) => {
+      t.el.style.setProperty("--x", t.c);
+      t.el.style.setProperty("--y", t.r);
+    };
+    const paint = (t) => {
+      t.el.textContent = String(t.v);
+      t.el.dataset.v = String(Math.min(t.v, 2048));
+      t.el.dataset.len = String(String(t.v).length);
+    };
+    const makeTile = (r, c, v, cls) => {
+      const t = {
+        id: uid++,
+        r,
+        c,
+        v,
+        el: h("div", { class: `w-2048-tile ${cls}` }),
+      };
+      place(t);
+      paint(t);
+      layer.append(t.el);
+      return t;
+    };
+    const flush = () => {
+      for (const el of doomed) el.remove();
+      doomed = [];
+      for (const el of layer.children) el.classList.remove("spawn", "merged");
     };
     const addTile = () => {
-      const c = emptyCells();
-      if (!c.length) return;
-      const [r, q] = c[Math.floor(Math.random() * c.length)];
-      grid[r][q] = Math.random() < 0.9 ? 2 : 4;
-      spawned = `${r},${q}`;
-    };
-    const draw = () => {
-      board.replaceChildren();
+      const free = [];
       for (let r = 0; r < 4; r++)
-        for (let q = 0; q < 4; q++) {
-          const v = grid[r][q];
-          const fresh = v && spawned === `${r},${q}`;
-          const t = h(
-            "div",
-            { class: `w-2048-tile${fresh ? " spawn" : ""}` },
-            v || "",
-          );
-          if (v) {
-            t.dataset.v = String(Math.min(v, 2048));
-            t.dataset.len = String(String(v).length);
-            if (v > 4) t.dataset.ink = "dark";
-          }
-          board.append(t);
-        }
-      scoreEl.textContent = `score: ${score}`;
-      scoreEl.className = "w-sub w-game-score";
-      board.classList.remove("over");
+        for (let c = 0; c < 4; c++) if (!grid[r][c]) free.push([r, c]);
+      if (!free.length) return;
+      const [r, c] = free[Math.floor(Math.random() * free.length)];
+      grid[r][c] = makeTile(
+        r,
+        c,
+        Math.random() < 0.9 ? 2 : 4,
+        layer.isConnected ? "spawn" : "",
+      );
+    };
+    const setScore = (gain) => {
+      scoreS.set(score);
+      if (score > best) {
+        best = score;
+        localStorage.setItem("w-2048-best", best);
+      }
+      bestS.set(best);
+      if (!gain || calmMotion()) return;
+      const d = h(
+        "span",
+        { class: "w-2048-delta", "aria-hidden": "true" },
+        `+${gain}`,
+      );
+      d.addEventListener("animationend", () => d.remove());
+      scoreS.el.append(d);
+    };
+    const showOver = (title, sub, label) => {
+      overTitle.textContent = title;
+      overSub.textContent = sub;
+      overBtn.textContent = label;
+      over.classList.add("show");
     };
     const reset = () => {
-      grid = Array.from({ length: 4 }, () => [0, 0, 0, 0]);
+      flush();
+      layer.replaceChildren();
+      over.classList.remove("show");
+      grid = Array.from({ length: 4 }, () => [null, null, null, null]);
       score = 0;
-      spawned = null;
+      won = false;
+      uid = 0;
       addTile();
       addTile();
-      draw();
+      setScore(0);
     };
-    const slide = (row) => {
-      const a = row.filter(Boolean);
-      for (let i = 0; i < a.length - 1; i++)
-        if (a[i] === a[i + 1]) {
-          a[i] *= 2;
-          score += a[i];
-          a.splice(i + 1, 1);
-        }
-      while (a.length < 4) a.push(0);
-      return a;
-    };
-    const rot = (g) => g[0].map((_, i) => g.map((row) => row[i]));
     const canMove = () => {
-      if (emptyCells().length) return true;
       for (let r = 0; r < 4; r++)
-        for (let q = 0; q < 4; q++) {
-          if (q < 3 && grid[r][q] === grid[r][q + 1]) return true;
-          if (r < 3 && grid[r][q] === grid[r + 1][q]) return true;
+        for (let c = 0; c < 4; c++) {
+          const v = grid[r][c]?.v;
+          if (!v) return true;
+          if (c < 3 && v === grid[r][c + 1]?.v) return true;
+          if (r < 3 && v === grid[r + 1][c]?.v) return true;
         }
       return false;
     };
     const move = (d) => {
-      const before = JSON.stringify(grid);
-      if (d === "left") grid = grid.map(slide);
-      else if (d === "right")
-        grid = grid.map((r) => slide(r.slice().reverse()).reverse());
-      else if (d === "up") grid = rot(rot(grid).map(slide));
-      else if (d === "down")
-        grid = rot(rot(grid).map((r) => slide(r.slice().reverse()).reverse()));
-      if (JSON.stringify(grid) !== before) {
-        addTile();
-        draw();
-        if (!canMove()) {
-          scoreEl.textContent = `game over · score: ${score}`;
-          scoreEl.className = "w-sub w-game-score over";
-          board.classList.add("over");
+      if (over.classList.contains("show")) return;
+      flush();
+      const vec = { left: [0, -1], right: [0, 1], up: [-1, 0], down: [1, 0] }[
+        d
+      ];
+      const order = [0, 1, 2, 3];
+      const rows = vec[0] === 1 ? order.toReversed() : order;
+      const cols = vec[1] === 1 ? order.toReversed() : order;
+      const next = Array.from({ length: 4 }, () => [null, null, null, null]);
+      const fused = new Set();
+      let moved = false;
+      let gain = 0;
+      for (const r of rows)
+        for (const c of cols) {
+          const t = grid[r][c];
+          if (!t) continue;
+          let nr = r;
+          let nc = c;
+          while (
+            nr + vec[0] >= 0 &&
+            nr + vec[0] < 4 &&
+            nc + vec[1] >= 0 &&
+            nc + vec[1] < 4 &&
+            !next[nr + vec[0]][nc + vec[1]]
+          ) {
+            nr += vec[0];
+            nc += vec[1];
+          }
+          const ar = nr + vec[0];
+          const ac = nc + vec[1];
+          const ahead = next[ar]?.[ac];
+          if (ahead && ahead.v === t.v && !fused.has(ahead)) {
+            t.r = ar;
+            t.c = ac;
+            place(t);
+            t.el.classList.add("gone");
+            ahead.el.classList.add("gone");
+            doomed.push(t.el, ahead.el);
+            const m = makeTile(ar, ac, t.v * 2, "merged");
+            next[ar][ac] = m;
+            fused.add(m);
+            gain += m.v;
+            if (m.v === 2048 && !won) won = true;
+            moved = true;
+            continue;
+          }
+          if (nr !== r || nc !== c) moved = true;
+          t.r = nr;
+          t.c = nc;
+          place(t);
+          next[nr][nc] = t;
         }
+      if (!moved) {
+        board.classList.remove("nudge", "left", "right", "up", "down");
+        void board.offsetWidth;
+        board.classList.add("nudge", d);
+        return;
       }
+      grid = next;
+      score += gain;
+      setScore(gain);
+      addTile();
+      setTimeout(() => {
+        for (const el of doomed) if (el.classList.contains("gone")) el.remove();
+      }, SLIDE);
+      if (won === true) {
+        won = "shown";
+        showOver("you made 2048", `score ${score}`, "keep going");
+        return;
+      }
+      if (!canMove())
+        showOver(
+          "no moves left",
+          `you scored ${score}${score < best ? `, best is ${best}` : ""}`,
+          "try again",
+        );
+    };
+    overBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (overBtn.textContent === "keep going") over.classList.remove("show");
+      else reset();
+      wrap.focus({ preventScroll: true });
+    };
+    newBtn.onclick = () => {
+      reset();
+      wrap.focus({ preventScroll: true });
     };
     wrap.addEventListener("keydown", (e) => {
       const m = {
@@ -6593,11 +9905,10 @@ reg({
         s: "down",
       };
       const dir = m[e.key] || m[e.key.toLowerCase?.()];
-      if (dir) {
-        move(dir);
-        e.preventDefault();
-        e.stopPropagation();
-      }
+      if (!dir) return;
+      move(dir);
+      e.preventDefault();
+      e.stopPropagation();
     });
     let tsx, tsy;
     wrap.addEventListener(
@@ -6613,36 +9924,16 @@ reg({
       const dx = e.changedTouches[0].clientX - tsx;
       const dy = e.changedTouches[0].clientY - tsy;
       if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
-      move(
-        Math.abs(dx) > Math.abs(dy)
-          ? dx > 0
-            ? "right"
-            : "left"
-          : dy > 0
-            ? "down"
-            : "up",
-      );
+      const horizontal = Math.abs(dx) > Math.abs(dy);
+      move(horizontal ? (dx > 0 ? "right" : "left") : dy > 0 ? "down" : "up");
       e.preventDefault();
     });
-    wrap.onclick = () => wrap.focus();
+    wrap.onclick = () => wrap.focus({ preventScroll: true });
     reset();
     return card(
       "2048",
-      "arrow keys or wasd · swipe on mobile",
-      wrap,
-      scoreEl,
-      h(
-        "div",
-        { class: "w-btn-row" },
-        h("button", {
-          class: "w-btn",
-          html: "new game",
-          onclick: () => {
-            reset();
-            wrap.focus();
-          },
-        }),
-      ),
+      "arrow keys or wasd to slide, swipe on touch screens",
+      h("div", { class: "w-game-col" }, gameBar([scoreS, bestS], newBtn), wrap),
     );
   },
 });
@@ -6651,18 +9942,29 @@ reg({
   id: "minesweeper",
   match: (q) => /^(?:play\s+)?mine\s?sweeper$/i.test(q.trim()),
   build: () => {
-    const ROWS = 9,
-      COLS = 9,
-      MINES = 10;
-    let cells, started, dead, won, flags;
-    let shown = new Set();
+    const ROWS = 9;
+    const COLS = 9;
+    const MINES = 10;
+    const FLAG = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 14V2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M5.2 2.6l7 2.9-7 2.9z" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+    const MINE = `<svg viewBox="0 0 16 16" aria-hidden="true"><g stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 1.8v12.4M1.8 8h12.4M3.6 3.6l8.8 8.8M12.4 3.6l-8.8 8.8"/></g><circle cx="8" cy="8" r="4.4" fill="currentColor"/></svg>`;
+    let cells, started, dead, won, flags, origin, t0, timer;
+    let flagMode = false;
+    let best = +(localStorage.getItem("w-mine-best") || 0);
     const board = h("div", { class: "w-mine-grid" });
-    const status = h("div", { class: "w-mine-status", role: "status" });
-    const face = h("div", {
-      class: "w-mine-face",
-      html: "🙂",
-      "aria-hidden": "true",
+    const status = h("div", { class: "w-game-status", role: "status" });
+    const minesS = gameStat("mines");
+    const timeS = gameStat("time", "0 s");
+    const flagBtn = h("button", {
+      class: "w-btn w-game-new w-mine-mode",
+      type: "button",
+      "aria-pressed": "false",
+      html: `${FLAG}<span>flag</span>`,
     });
+    const newBtn = h(
+      "button",
+      { class: "w-btn w-game-new", type: "button" },
+      "new game",
+    );
     const inBounds = (r, c) => r >= 0 && c >= 0 && r < ROWS && c < COLS;
     const neighbors = (r, c) => {
       const out = [];
@@ -6680,6 +9982,7 @@ reg({
           revealed: false,
           flagged: false,
           count: 0,
+          wave: 0,
         })),
       );
     const placeMines = (sr, sc) => {
@@ -6699,12 +10002,17 @@ reg({
             ([nr, nc]) => cells[nr][nc].mine,
           ).length;
     };
-    const reveal = (r, c) => {
-      const cell = cells[r][c];
-      if (cell.revealed || cell.flagged) return;
-      cell.revealed = true;
-      if (cell.count === 0 && !cell.mine)
-        for (const [nr, nc] of neighbors(r, c)) reveal(nr, nc);
+    const reveal = (sr, sc, base = 0) => {
+      const queue = [[sr, sc, base]];
+      while (queue.length) {
+        const [r, c, d] = queue.shift();
+        const cell = cells[r][c];
+        if (cell.revealed || cell.flagged) continue;
+        cell.revealed = true;
+        cell.wave = d;
+        if (cell.count === 0 && !cell.mine)
+          for (const [nr, nc] of neighbors(r, c)) queue.push([nr, nc, d + 1]);
+      }
     };
     const remaining = () =>
       cells.reduce(
@@ -6712,67 +10020,109 @@ reg({
           acc + row.filter((cell) => !cell.mine && !cell.revealed).length,
         0,
       );
-    const showStatus = () => {
-      const left = MINES - flags;
-      if (won) {
-        status.textContent = "you win 😎";
-        status.className = "w-mine-status win";
-      } else if (dead) {
-        status.textContent = "boom · you hit a mine 💀";
-        status.className = "w-mine-status lost";
-      } else {
-        status.textContent = `mines left: ${left}`;
-        status.className = "w-mine-status";
-      }
-      const next = won ? "😎" : dead ? "💀" : "🙂";
-      if (face.textContent !== next) {
-        face.textContent = next;
-        face.classList.remove("swap");
-        void face.offsetWidth;
-        face.classList.add("swap");
-      }
+    const elapsed = () =>
+      t0 ? Math.floor((performance.now() - t0) / 1000) : 0;
+    const stopClock = () => {
+      clearInterval(timer);
+      timeS.set(`${elapsed()} s`);
     };
+    const showStatus = () => {
+      minesS.set(MINES - flags);
+      if (won || dead) return;
+      status.className = "w-game-status";
+      status.textContent = flagMode
+        ? "flag mode is on, taps place flags"
+        : started
+          ? ""
+          : "your first click is always safe";
+    };
+    const btns = [];
     const draw = () => {
-      board.replaceChildren();
       for (let r = 0; r < ROWS; r++)
         for (let c = 0; c < COLS; c++) {
           const cell = cells[r][c];
-          const btn = h("button", { class: "w-mine-cell" });
-          if (cell.revealed) {
-            btn.classList.add("revealed");
-            const key = `${r},${c}`;
-            if (!shown.has(key)) {
-              shown.add(key);
-              btn.classList.add("pop");
-              btn.style.animationDelay = `${((r + c) % 4) * 40}ms`;
-            }
-            if (cell.mine) {
-              btn.classList.add("w-mine-mine");
-              btn.textContent = "💣";
-            } else if (cell.count) {
-              btn.textContent = String(cell.count);
-              btn.dataset.n = String(cell.count);
-            }
-          } else if (cell.flagged) {
+          const btn = btns[r * COLS + c];
+          const s = cell.revealed
+            ? cell.mine
+              ? "mine"
+              : `n${cell.count}`
+            : cell.flagged
+              ? "flag"
+              : "";
+          if (btn.dataset.s === s) continue;
+          const was = btn.dataset.s;
+          btn.dataset.s = s;
+          btn.className = "w-mine-cell";
+          btn.style.animationDelay = "";
+          btn.removeAttribute("data-n");
+          btn.replaceChildren();
+          const label = `row ${r + 1}, column ${c + 1}`;
+          btn.setAttribute("aria-label", label);
+          if (!s) continue;
+          if (s === "flag") {
             btn.classList.add("flag");
-            btn.textContent = "🚩";
+            btn.setAttribute("aria-label", `${label}: flagged`);
+            btn.append(h("span", { class: "w-mine-flag", html: FLAG }));
+            if (won)
+              btn.style.animationDelay = `${Math.min(cell.wave * 45, 500)}ms`;
+            continue;
           }
-          btn.onclick = () => {
-            if (cells[r][c].revealed) chord(r, c);
-            else onReveal(r, c);
-          };
-          btn.onauxclick = (e) => {
-            if (e.button !== 1) return;
-            e.preventDefault();
-            chord(r, c);
-          };
-          btn.oncontextmenu = (e) => {
-            e.preventDefault();
-            onFlag(r, c);
-          };
-          board.append(btn);
+          btn.classList.add("revealed");
+          if (!was || was === "flag") {
+            btn.classList.add("pop");
+            btn.style.animationDelay = `${Math.min(cell.wave * 28, 420)}ms`;
+          }
+          if (s === "mine") {
+            btn.classList.add("w-mine-mine");
+            btn.setAttribute("aria-label", `${label}: mine`);
+            if (origin && origin[0] === r && origin[1] === c)
+              btn.classList.add("boom");
+            btn.innerHTML = MINE;
+            continue;
+          }
+          btn.setAttribute("aria-label", `${label}: ${cell.count}`);
+          if (cell.count) {
+            btn.textContent = String(cell.count);
+            btn.dataset.n = String(cell.count);
+          }
         }
       showStatus();
+    };
+    const endWave = (r0, c0) => {
+      for (let r = 0; r < ROWS; r++)
+        for (let c = 0; c < COLS; c++)
+          cells[r][c].wave = Math.max(Math.abs(r - r0), Math.abs(c - c0));
+    };
+    const boom = (r, c) => {
+      dead = true;
+      stopClock();
+      origin = [r, c];
+      endWave(r, c);
+      for (const row of cells)
+        for (const m of row) if (m.mine) m.revealed = true;
+      draw();
+      wrap.classList.remove("hit");
+      void wrap.offsetWidth;
+      wrap.classList.add("hit");
+      status.textContent = "you hit a mine";
+      status.className = "w-game-status lose";
+    };
+    const checkWin = (r, c) => {
+      if (remaining() !== 0) return;
+      won = true;
+      stopClock();
+      endWave(r, c);
+      for (const row of cells)
+        for (const m of row) if (m.mine) m.flagged = true;
+      flags = MINES;
+      const secs = elapsed();
+      const fresh = !best || secs < best;
+      if (fresh) {
+        best = secs;
+        localStorage.setItem("w-mine-best", best);
+      }
+      status.textContent = `cleared in ${secs} s${fresh ? ", a new best" : `, best is ${best} s`}`;
+      status.className = "w-game-status win";
     };
     const onReveal = (r, c) => {
       if (dead || won) return;
@@ -6781,21 +10131,16 @@ reg({
       if (!started) {
         placeMines(r, c);
         started = true;
+        t0 = performance.now();
+        clearInterval(timer);
+        timer = setInterval(() => {
+          if (!board.isConnected) return clearInterval(timer);
+          timeS.set(`${elapsed()} s`);
+        }, 1000);
       }
-      if (cell.mine) {
-        dead = true;
-        for (const row of cells)
-          for (const m of row) if (m.mine) m.revealed = true;
-        draw();
-        return;
-      }
+      if (cell.mine) return boom(r, c);
       reveal(r, c);
-      if (remaining() === 0) {
-        won = true;
-        for (const row of cells)
-          for (const m of row) if (m.mine) m.flagged = true;
-        flags = MINES;
-      }
+      checkWin(r, c);
       draw();
     };
     const onFlag = (r, c) => {
@@ -6803,6 +10148,7 @@ reg({
       const cell = cells[r][c];
       if (cell.revealed) return;
       cell.flagged = !cell.flagged;
+      cell.wave = 0;
       flags += cell.flagged ? 1 : -1;
       draw();
     };
@@ -6813,60 +10159,98 @@ reg({
       const adj = neighbors(r, c);
       const flagged = adj.filter(([nr, nc]) => cells[nr][nc].flagged).length;
       if (flagged !== cell.count) return;
-      let hitMine = false;
+      let hit = null;
       for (const [nr, nc] of adj) {
         const n = cells[nr][nc];
         if (n.flagged || n.revealed) continue;
-        if (n.mine) hitMine = true;
-        else reveal(nr, nc);
+        if (n.mine) hit = [nr, nc];
+        else reveal(nr, nc, 1);
       }
-      if (hitMine) {
-        dead = true;
-        for (const row of cells)
-          for (const m of row) if (m.mine) m.revealed = true;
-        draw();
-        return;
-      }
-      if (remaining() === 0) {
-        won = true;
-        for (const row of cells)
-          for (const m of row) if (m.mine) m.flagged = true;
-        flags = MINES;
-      }
+      if (hit) return boom(...hit);
+      checkWin(r, c);
       draw();
     };
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS; c++) {
+        const btn = h("button", { class: "w-mine-cell", type: "button" });
+        let press = null;
+        let held = false;
+        const cancel = () => {
+          clearTimeout(press);
+          press = null;
+        };
+        btn.onpointerdown = (e) => {
+          held = false;
+          if (e.pointerType !== "touch") return;
+          cancel();
+          press = setTimeout(() => {
+            press = null;
+            held = true;
+            if (cells[r][c].revealed) return;
+            onFlag(r, c);
+            navigator.vibrate?.(12);
+          }, 380);
+        };
+        btn.onpointerup = cancel;
+        btn.onpointerleave = cancel;
+        btn.onpointercancel = cancel;
+        btn.onclick = () => {
+          if (held) {
+            held = false;
+            return;
+          }
+          if (cells[r][c].revealed) return chord(r, c);
+          if (flagMode) return onFlag(r, c);
+          onReveal(r, c);
+        };
+        btn.onauxclick = (e) => {
+          if (e.button !== 1) return;
+          e.preventDefault();
+          chord(r, c);
+        };
+        btn.oncontextmenu = (e) => {
+          e.preventDefault();
+          if (held) return;
+          onFlag(r, c);
+        };
+        btns.push(btn);
+        board.append(btn);
+      }
     const reset = () => {
+      clearInterval(timer);
       cells = makeCells();
       started = false;
       dead = false;
       won = false;
       flags = 0;
-      shown = new Set();
+      origin = null;
+      t0 = 0;
+      timeS.set("0 s");
+      wrap.classList.remove("hit");
       draw();
     };
-    const wrap = h("div", { class: "w-game", tabindex: "0" }, board);
+    const wrap = h("div", { class: "w-game w-mine-wrap" }, board);
+    flagBtn.onclick = () => {
+      flagMode = !flagMode;
+      flagBtn.setAttribute("aria-pressed", String(flagMode));
+      showStatus();
+    };
+    newBtn.onclick = reset;
     wrap.addEventListener("keydown", (e) => {
-      if (e.key.toLowerCase() === "r") {
-        reset();
-        e.preventDefault();
-      }
+      if (e.key.toLowerCase() !== "r" || e.metaKey || e.ctrlKey) return;
+      reset();
+      e.preventDefault();
     });
-    wrap.onclick = () => wrap.focus();
     reset();
     return card(
       "minesweeper",
-      "left-click reveals · right-click flags · click a number to chord · r restarts",
-      wrap,
-      status,
+      "right-click or long-press to flag, click a number to clear around it",
       h(
         "div",
-        { class: "w-btn-row" },
-        face,
-        h("button", {
-          class: "w-btn",
-          html: "new game",
-          onclick: reset,
-        }),
+        { class: "w-game-col" },
+        gameBar([minesS, timeS], flagBtn, newBtn),
+        wrap,
+        status,
       ),
     );
   },
@@ -6892,6 +10276,11 @@ const CHORDS = {
   Cmaj7: [-1, 3, 2, 0, 0, 0],
   Gmaj7: [3, 2, 0, 0, 0, 2],
   Fmaj7: [-1, -1, 3, 2, 1, 0],
+  Emaj7: [0, 2, 1, 1, 0, 0],
+  Dmaj7: [-1, -1, 0, 2, 2, 2],
+  Dm7: [-1, -1, 0, 2, 1, 1],
+  Am7: [-1, 0, 2, 0, 1, 0],
+  Em7: [0, 2, 2, 0, 3, 0],
 };
 
 reg({
@@ -6911,64 +10300,164 @@ reg({
         .replace(/MIN$/i, "m")
         .replace(/M7$/i, "m7")
         .replace(/MAJ7$/i, "maj7");
-    const frets =
-      CHORDS[norm] ||
-      CHORDS[name[0].toUpperCase() + name.slice(1).toLowerCase()];
-    if (!frets)
+    const [, root, acc, qual] = norm.match(/^([A-G])([#b]?)(.*)$/) || [];
+    const quals = {
+      "": ["major", [0, 4, 7], [0, 2, 2, 1, 0, 0], [-1, 0, 2, 2, 2, 0]],
+      m: ["minor", [0, 3, 7], [0, 2, 2, 0, 0, 0], [-1, 0, 2, 2, 1, 0]],
+      7: [
+        "dominant 7th",
+        [0, 4, 7, 10],
+        [0, 2, 0, 1, 0, 0],
+        [-1, 0, 2, 0, 2, 0],
+      ],
+      m7: ["minor 7th", [0, 3, 7, 10], [0, 2, 0, 0, 0, 0], [-1, 0, 2, 0, 1, 0]],
+      maj7: [
+        "major 7th",
+        [0, 4, 7, 11],
+        [0, -1, 1, 1, 0, -1],
+        [-1, 0, 2, 1, 2, 0],
+      ],
+    };
+    const spec = root && quals[qual];
+    if (!spec)
       return card(
         "guitar chord",
         null,
         h(
           "div",
           { class: "w-chord-empty" },
-          h("div", null, `No diagram for "${name}" yet.`),
+          h("div", null, `no diagram for "${name}"`),
           h(
             "div",
             { class: "w-sub" },
-            "Search a chord like C, G, Am, E7 or Cmaj7.",
+            "try a chord like C, F#m, Bb7, Em7 or Cmaj7",
           ),
         ),
       );
-    const X = (s) => 14 + s * 24;
+    const [quality, intervals, eShape, aShape] = spec;
+    const pc =
+      ({ C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[root] +
+        (acc === "#" ? 1 : acc === "b" ? -1 : 0) +
+        12) %
+      12;
+    const onE = (pc + 8) % 12;
+    const onA = (pc + 3) % 12;
+    const [shape, at] = onA < onE ? [aShape, onA] : [eShape, onE];
+    const frets = CHORDS[norm] || shape.map((f) => (f < 0 ? -1 : f + at));
+    const fretted = frets.filter((f) => f > 0);
+    const low = Math.min(...fretted);
+    const base = Math.max(...fretted) > 4 ? low : 1;
+    const barred = frets.flatMap((f, s) => (f === low ? [s] : []));
+    const barreAt =
+      barred.length > 2 &&
+      frets.slice(barred[0], barred.at(-1) + 1).every((f) => f >= low) &&
+      low;
+    const ri = "CDEFGAB".indexOf(root);
+    const tones = intervals.map((i) => {
+      const li = (ri + { 0: 0, 3: 2, 4: 2, 7: 4, 10: 6, 11: 6 }[i]) % 7;
+      const d = ((((pc + i - [0, 2, 4, 5, 7, 9, 11][li]) % 12) + 18) % 12) - 6;
+      return `${"CDEFGAB"[li]}${d > 0 ? "#".repeat(d) : "b".repeat(-d)}`;
+    });
+    const X = (s) => 22 + s * 24;
     const Y = (row) => 34 + (row - 0.5) * 30;
     const parts = [];
     for (let s = 0; s < 6; s++)
       parts.push(
-        `<line class="w-chord-string" x1="${X(s)}" y1="34" x2="${X(s)}" y2="154" style="stroke-width:${(2.2 - s * 0.22).toFixed(2)}"/>`,
+        `<line class="w-chord-string" data-s="${s}" x1="${X(s)}" y1="34" x2="${X(s)}" y2="154" style="stroke-width:${(2 - s * 0.2).toFixed(2)}"/>`,
       );
     for (let row = 1; row <= 4; row++)
       parts.push(
-        `<line class="w-chord-fret" x1="14" y1="${34 + row * 30}" x2="134" y2="${34 + row * 30}"/>`,
+        `<line class="w-chord-fret" x1="${X(0)}" y1="${34 + row * 30}" x2="${X(5)}" y2="${34 + row * 30}"/>`,
       );
-    parts.push(`<line class="w-chord-nut" x1="14" y1="34" x2="134" y2="34"/>`);
+    parts.push(
+      base === 1
+        ? `<line class="w-chord-nut" x1="${X(0)}" y1="34" x2="${X(5)}" y2="34"/>`
+        : `<line class="w-chord-fret" x1="${X(0)}" y1="34" x2="${X(5)}" y2="34"/><text class="w-chord-pos" x="${X(5) + 14}" y="${Y(1) + 4}">${base}fr</text>`,
+    );
     for (let s = 0; s < 6; s++) {
       const f = frets[s];
       if (f === 0)
-        parts.push(`<circle class="w-chord-open" cx="${X(s)}" cy="20" r="5"/>`);
+        parts.push(
+          `<circle class="w-chord-open" data-s="${s}" cx="${X(s)}" cy="20" r="5" />`,
+        );
       else if (f < 0)
         parts.push(
-          `<path class="w-chord-mute" d="M${X(s) - 5} 15l10 10M${X(s) + 5} 15l-10 10"/>`,
+          `<path class="w-chord-mute" d="M${X(s) - 4.5} 15.5l9 9M${X(s) + 4.5} 15.5l-9 9"/>`,
         );
     }
-    let dotIdx = 0;
-    for (let s = 0; s < 6; s++) {
-      if (frets[s] <= 0) continue;
+    if (barreAt) {
+      const on = frets
+        .map((f, s) => (f === barreAt ? s : -1))
+        .filter((s) => s >= 0);
+      const y = Y(barreAt - base + 1);
       parts.push(
-        `<circle class="w-chord-dot" cx="${X(s)}" cy="${Y(frets[s])}" r="9" style="--i:${dotIdx++}"/>`,
+        `<rect class="w-chord-barre" x="${X(on[0]) - 9}" y="${y - 9}" width="${X(on.at(-1)) - X(on[0]) + 18}" height="18" rx="9"/>`,
       );
     }
-    for (const [s, label] of ["E", "A", "D", "G", "B", "e"].entries())
+    for (let s = 0; s < 6; s++) {
+      if (frets[s] <= 0 || frets[s] === barreAt) continue;
       parts.push(
-        `<text class="w-chord-name" x="${X(s)}" y="172">${label}</text>`,
+        `<circle class="w-chord-dot" data-s="${s}" cx="${X(s)}" cy="${Y(frets[s] - base + 1)}" r="9"/>`,
+      );
+    }
+    for (const [s, label] of ["E", "A", "D", "G", "B", "E"].entries())
+      parts.push(
+        `<text class="w-chord-name" x="${X(s)}" y="174">${label}</text>`,
       );
     const diagram = h("div", {
       class: "w-chord",
-      html: `<svg viewBox="0 0 148 180" role="img" aria-label="${norm} chord diagram">${parts.join("")}</svg>`,
+      html: `<svg viewBox="0 0 164 182" role="img" aria-label="${norm} chord diagram${base > 1 ? `, starting at fret ${base}` : ""}">${parts.join("")}</svg>`,
     });
+    const strum = () => {
+      const ac = audio();
+      const t0 = ac.currentTime + 0.02;
+      const calm = calmMotion();
+      let n = 0;
+      [40, 45, 50, 55, 59, 64].forEach((open, s) => {
+        if (frets[s] < 0) return;
+        const t = t0 + n++ * 0.035;
+        const o = ac.createOscillator(),
+          f = ac.createBiquadFilter(),
+          g = ac.createGain();
+        o.type = "sawtooth";
+        o.frequency.value = noteFreq(open + frets[s]);
+        f.type = "lowpass";
+        f.frequency.setValueAtTime(3200, t);
+        f.frequency.exponentialRampToValueAtTime(700, t + 0.6);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.09, t + 0.006);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 1.8);
+        o.connect(f);
+        f.connect(g);
+        g.connect(ac.destination);
+        o.start(t);
+        o.stop(t + 1.85);
+        if (calm) return;
+        diagram.querySelector(`.w-chord-string[data-s="${s}"]`)?.animate(
+          [0, 1.4, -1.1, 0.8, -0.5, 0.3, -0.15, 0].map((x) => ({
+            translate: `${x}px 0`,
+          })),
+          {
+            duration: 520,
+            delay: (t - ac.currentTime) * 1000,
+            easing: "linear",
+          },
+        );
+      });
+    };
     return card(
       `${norm} chord`,
-      "guitar · low E to high E",
-      h("div", { class: "w-center" }, diagram),
+      `${root}${acc} ${quality} · ${tones.join(" ")}`,
+      h(
+        "div",
+        { class: "w-chord-stage" },
+        diagram,
+        h(
+          "button",
+          { class: "w-btn w-chord-strum", type: "button", onclick: strum },
+          "strum",
+        ),
+      ),
     );
   },
 });
@@ -6980,32 +10469,71 @@ reg({
       q.trim(),
     ),
   build: () => {
-    const a = h("textarea", {
-      class: "w-textarea",
-      rows: "5",
-      placeholder: "original",
-    });
-    const b = h("textarea", {
-      class: "w-textarea",
-      rows: "5",
-      placeholder: "changed",
-    });
-    const out = h("div", { class: "w-code w-diff-out" });
-    const stat = h("div", { class: "w-diff-stat", "aria-live": "polite" });
+    const a = devEditor("original text", "7", "paste the original");
+    const b = devEditor("changed text", "7", "paste the changed version");
+    const left = devPanel("original", a);
+    const right = devPanel("changed", b);
+    const view = h("div", { class: "w-diff-view" });
     let lastRows = [];
+    const out = devPanel(
+      "changes",
+      view,
+      () =>
+        lastRows.map(({ s, t }) => `${s === "=" ? " " : s} ${t}`).join("\n"),
+      "copy diff",
+    );
+    const lineCount = (ta, p) => {
+      const n = ta.value ? ta.value.split("\n").length : 0;
+      p.meta.textContent = n ? `${n} line${n === 1 ? "" : "s"}` : "";
+    };
+    const empty = (text) => {
+      lastRows = [];
+      out.copy.disabled = true;
+      out.meta.replaceChildren();
+      view.replaceChildren(
+        h("div", { class: "w-dev-empty w-diff-empty" }, text),
+      );
+    };
+    const line = ({ s, t, o, n, hl }) =>
+      h(
+        "div",
+        {
+          class: `w-diff-row${s === "+" ? " add" : s === "-" ? " del" : ""}`,
+        },
+        h("span", { class: "w-diff-ln" }, o ?? ""),
+        h("span", { class: "w-diff-ln" }, n ?? ""),
+        h(
+          "span",
+          { class: "w-diff-sign", "aria-hidden": "true" },
+          s === "=" ? "" : s === "+" ? "+" : "−",
+        ),
+        h(
+          "span",
+          { class: "w-diff-text" },
+          hl
+            ? [
+                t.slice(0, hl[0]),
+                h("span", { class: "w-diff-hl" }, t.slice(hl[0], hl[1])),
+                t.slice(hl[1]),
+              ]
+            : t,
+        ),
+      );
     const run = () => {
-      const la = a.value.split("\n"),
-        lb = b.value.split("\n");
-      const n = la.length,
-        m = lb.length;
+      lineCount(a, left);
+      lineCount(b, right);
+      out.panel.classList.remove("err");
+      if (!a.value && !b.value)
+        return empty("paste text on both sides to compare");
+      const la = a.value.split("\n");
+      const lb = b.value.split("\n");
+      const n = la.length;
+      const m = lb.length;
       if (n * m > 4e6) {
-        out.textContent = "";
-        stat.textContent = "too long to compare, try shorter inputs";
-        stat.classList.add("err");
-        return;
+        out.panel.classList.add("err");
+        return empty("too long to compare here. try under 2,000 lines a side");
       }
-      stat.classList.remove("err");
-      const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+      const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
       for (let i = n - 1; i >= 0; i--)
         for (let j = m - 1; j >= 0; j--)
           dp[i][j] =
@@ -7013,62 +10541,91 @@ reg({
               ? dp[i + 1][j + 1] + 1
               : Math.max(dp[i + 1][j], dp[i][j + 1]);
       const rows = [];
-      let i = 0,
-        j = 0;
-      while (i < n && j < m) {
-        if (la[i] === lb[j]) {
-          rows.push([" ", la[i]]);
-          i++;
-          j++;
-        } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-          rows.push(["-", la[i]]);
-          i++;
-        } else {
-          rows.push(["+", lb[j]]);
-          j++;
-        }
+      let i = 0;
+      let j = 0;
+      while (i < n || j < m) {
+        if (i < n && j < m && la[i] === lb[j])
+          rows.push({ s: "=", t: la[i], o: ++i, n: ++j });
+        else if (j >= m || (i < n && dp[i + 1][j] >= dp[i][j + 1]))
+          rows.push({ s: "-", t: la[i], o: ++i });
+        else rows.push({ s: "+", t: lb[j], n: ++j });
       }
-      while (i < n) rows.push(["-", la[i++]]);
-      while (j < m) rows.push(["+", lb[j++]]);
+      for (let k = 0; k < rows.length; ) {
+        if (rows[k].s !== "-") {
+          k++;
+          continue;
+        }
+        let d = k;
+        while (rows[d]?.s === "-") d++;
+        let e = d;
+        while (rows[e]?.s === "+") e++;
+        if (e - d === d - k)
+          for (let x = 0; x < d - k; x++) {
+            const del = rows[k + x];
+            const add = rows[d + x];
+            let p = 0;
+            while (p < del.t.length && del.t[p] === add.t[p]) p++;
+            let q = 0;
+            while (
+              q < del.t.length - p &&
+              q < add.t.length - p &&
+              del.t.at(-1 - q) === add.t.at(-1 - q)
+            )
+              q++;
+            if (p + q > 0) {
+              del.hl = [p, del.t.length - q];
+              add.hl = [p, add.t.length - q];
+            }
+          }
+        k = e;
+      }
       lastRows = rows;
-      const added = rows.filter(([s]) => s === "+").length;
-      const removed = rows.filter(([s]) => s === "-").length;
-      stat.textContent =
-        added || removed
-          ? `${added} added, ${removed} removed`
-          : "the two sides match";
-      out.replaceChildren(
-        ...rows.map(([s, t]) =>
-          h(
-            "div",
-            {
-              class: `w-diff-line ${s === "+" ? "add" : s === "-" ? "del" : ""}`,
-            },
-            `${s} ${t}`,
-          ),
-        ),
+      const added = rows.filter((r) => r.s === "+").length;
+      const removed = rows.filter((r) => r.s === "-").length;
+      if (!added && !removed) return empty("no differences, both sides match");
+      out.copy.disabled = false;
+      out.meta.replaceChildren(
+        h("span", { class: "w-diff-plus" }, `${added} added`),
+        ", ",
+        h("span", { class: "w-diff-minus" }, `${removed} removed`),
       );
+      view.style.setProperty("--ln", `${String(Math.max(n, m)).length}ch`);
+      const CONTEXT = 3;
+      const near = rows.map((_, x) =>
+        rows
+          .slice(Math.max(0, x - CONTEXT), x + CONTEXT + 1)
+          .some((r) => r.s !== "="),
+      );
+      const kids = [];
+      for (let x = 0; x < rows.length; ) {
+        if (near[x]) {
+          kids.push(line(rows[x++]));
+          continue;
+        }
+        let y = x;
+        while (y < rows.length && !near[y]) y++;
+        const hidden = rows.slice(x, y);
+        if (hidden.length < 4) kids.push(...hidden.map(line));
+        else {
+          const fold = h(
+            "button",
+            { type: "button", class: "w-diff-fold" },
+            `show ${hidden.length} unchanged lines`,
+          );
+          fold.onclick = () => fold.replaceWith(...hidden.map(line));
+          kids.push(fold);
+        }
+        x = y;
+      }
+      view.replaceChildren(...kids);
     };
     a.oninput = b.oninput = run;
+    run();
     return card(
       "text diff",
-      "line-by-line comparison",
-      h(
-        "div",
-        { class: "w-md-split" },
-        h("label", { class: "w-label col" }, "original", a),
-        h("label", { class: "w-label col" }, "changed", b),
-      ),
-      stat,
-      h(
-        "div",
-        { class: "w-out-row" },
-        out,
-        copyBtn(
-          () => lastRows.map(([s, t]) => `${s} ${t}`).join("\n"),
-          "copy diff",
-        ),
-      ),
+      "line by line, with changes inside each line marked",
+      h("div", { class: "w-md-split w-diff-inputs" }, left.panel, right.panel),
+      out.panel,
     );
   },
 });
@@ -7145,29 +10702,43 @@ reg({
     return m ? { n: (m[1] || m[2]).replace(/,/g, "") } : null;
   },
   build: ({ n }) => {
-    const num = parseInt(n, 10);
-    if (Math.abs(num) >= 1e15)
-      return card(
-        "number to words",
-        null,
-        h(
-          "div",
-          { class: "w-sub w-nw-limit" },
-          "That number is too large to spell out. Try one below 1 quadrillion.",
-        ),
-      );
-    const words = numToWords(num);
-    return card(
-      "number to words",
-      null,
-      h("div", { class: "w-nw-words" }, words),
-      h(
-        "div",
-        { class: "w-out-row" },
-        h("div", { class: "w-out w-nnum" }, num.toLocaleString()),
-        copyBtn(() => words, "Copy the words"),
-      ),
+    const input = h("input", {
+      class: "w-input w-nw-in",
+      type: "text",
+      inputmode: "numeric",
+      autocomplete: "off",
+      "aria-label": "number",
+      placeholder: "type a number",
+      value: (+n).toLocaleString("en-US"),
+    });
+    const words = h("div", {
+      class: "w-tx-text w-nw-words",
+      "data-ph": "the words appear here",
+    });
+    const copy = copyBtn(() => words.textContent, "copy the words");
+    const panel = h(
+      "div",
+      { class: "w-tx-out w-nw-out", role: "status", "aria-live": "polite" },
+      words,
+      copy,
     );
+    const run = () => {
+      const raw = input.value.replace(/[\s,_]/g, "");
+      const bad = raw && !/^-?\d+$/.test(raw);
+      const big = !bad && raw && Math.abs(+raw) >= 1e15;
+      words.textContent = bad
+        ? "whole numbers only"
+        : big
+          ? "that's too large to spell out. try one below a quadrillion."
+          : raw
+            ? numToWords(parseInt(raw, 10))
+            : "";
+      panel.classList.toggle("err", Boolean(bad || big));
+      copy.disabled = Boolean(bad || big || !raw);
+    };
+    input.oninput = run;
+    run();
+    return card("number to words", null, input, panel);
   },
 });
 
@@ -7231,29 +10802,63 @@ reg({
         5: "Server Error",
       }[cls] ||
       "Unknown";
-    const note =
+    const group =
       {
-        1: "informational response",
-        2: "request succeeded",
-        3: "redirect, further action needed",
+        1: "informational",
+        2: "success",
+        3: "redirection",
         4: "client error",
         5: "server error",
-      }[cls] || "";
+      }[cls] || "unknown class";
+    const note = {
+      100: "the server got the request headers and the client should send the body.",
+      101: "the server is switching to the protocol the client asked for, like WebSocket.",
+      200: "the request worked and the response carries the result.",
+      201: "the request worked and created a new resource.",
+      202: "the request was accepted but hasn't been processed yet.",
+      204: "the request worked and there is no body to send back.",
+      206: "the server is sending only the byte range the client asked for.",
+      301: "the resource moved for good. update links to the new URL.",
+      302: "the resource is at another URL for now. keep using the original.",
+      303: "fetch the result from another URL with a GET request.",
+      304: "the cached copy is still fresh, so the server sent no body.",
+      307: "temporary redirect that keeps the original method and body.",
+      308: "permanent redirect that keeps the original method and body.",
+      400: "the server couldn't parse the request, usually malformed syntax.",
+      401: "the request needs valid authentication credentials.",
+      403: "the server understood the request but refuses to allow it.",
+      404: "the server can't find anything at this URL.",
+      405: "the resource exists but doesn't accept this HTTP method.",
+      408: "the server gave up waiting for the client to finish the request.",
+      409: "the request conflicts with the current state of the resource.",
+      410: "the resource was here but has been removed on purpose.",
+      413: "the request body is larger than the server will accept.",
+      415: "the server doesn't support the body's media type.",
+      418: "an April Fools' joke from RFC 2324. the teapot refuses to brew coffee.",
+      422: "the syntax is fine but the server couldn't process the contents.",
+      429: "the client sent too many requests. slow down and retry later.",
+      451: "the resource is blocked for legal reasons.",
+      500: "something went wrong on the server with no more specific code.",
+      501: "the server doesn't support the feature needed for this request.",
+      502: "a gateway or proxy got a bad response from the upstream server.",
+      503: "the server is overloaded or down for maintenance.",
+      504: "a gateway or proxy timed out waiting for the upstream server.",
+    }[code];
     return card(
       "http status",
-      null,
+      `${cls}xx ${group}`,
       h(
         "div",
-        { class: "w-out-row w-http-row" },
+        { class: "w-http-row" },
         h(
           "div",
           { class: `w-http-hero c${cls}` },
-          h("div", { class: "w-http-code" }, code),
+          h("div", { class: "w-big w-http-code" }, code),
           h("div", { class: "w-http-txt" }, txt),
         ),
-        copyBtn(() => `${code} ${txt}`),
+        copyBtn(() => `${code} ${txt}`, "copy status line"),
       ),
-      h("div", { class: "w-http-note" }, note),
+      note && h("p", { class: "w-http-note" }, note),
     );
   },
 });
@@ -7267,41 +10872,60 @@ reg({
     return null;
   },
   build: ({ oct }) => {
-    const groups = ["owner", "group", "public"];
+    const groups = ["owner", "group", "others"];
     const perms = ["r", "w", "x"];
     const permNames = ["read", "write", "execute"];
     const state = oct.split("").map((d) => +d);
     const boxes = [];
-    const octEl = h("div", { class: "w-chmod-oct w-mono" });
-    const symEl = h("div", { class: "w-chmod-sym w-mono" });
+    const digitEls = groups.map(() => h("span", { class: "w-chmod-digit" }));
+    const octEl = h(
+      "div",
+      { class: "w-big w-mono w-chmod-oct", "aria-live": "polite" },
+      ...digitEls,
+    );
+    const symEls = groups.flatMap(() =>
+      perms.map(() => h("span", { class: "w-chmod-bit" })),
+    );
+    const symEl = h("div", { class: "w-chmod-sym w-mono" }, ...symEls);
     const upd = () => {
-      const digits = boxes.map((g) =>
-        g.reduce((acc, cb, i) => acc + (cb.checked ? [4, 2, 1][i] : 0), 0),
-      );
-      octEl.textContent = digits.join("");
-      symEl.textContent = boxes
-        .map((g) => g.map((cb, i) => (cb.checked ? perms[i] : "-")).join(""))
-        .join("");
+      boxes.forEach((g, gi) => {
+        const d = String(
+          g.reduce((acc, cb, i) => acc + (cb.checked ? [4, 2, 1][i] : 0), 0),
+        );
+        const el = digitEls[gi];
+        if (el.textContent !== d && el.textContent) {
+          el.classList.remove("bump");
+          el.offsetWidth;
+          el.classList.add("bump");
+        }
+        el.textContent = d;
+        g.forEach((cb, i) => {
+          const bit = symEls[gi * 3 + i];
+          bit.textContent = cb.checked ? perms[i] : "-";
+          bit.classList.toggle("on", cb.checked);
+        });
+      });
     };
-    const grid = h("div", { class: "w-chmod" });
+    const grid = h(
+      "div",
+      { class: "w-chmod", role: "group", "aria-label": "permissions" },
+      h("span"),
+      permNames.map((p) => h("span", { class: "w-chmod-col" }, p)),
+    );
     groups.forEach((g, gi) => {
-      const row = [];
-      boxes[gi] = row;
-      const groupEl = h(
-        "div",
-        { class: "w-chmod-group" },
-        h("div", { class: "w-chmod-label" }, g),
-      );
-      permNames.forEach((name, pi) => {
+      boxes[gi] = permNames.map((name, pi) => {
         const cb = h("input", {
           type: "checkbox",
+          "aria-label": `${g} ${name}`,
           ...(state[gi] & [4, 2, 1][pi] ? { checked: "" } : {}),
         });
         cb.onchange = upd;
-        row.push(cb);
-        groupEl.append(h("label", { class: "w-chk" }, cb, name));
+        return cb;
       });
-      grid.append(groupEl);
+      grid.append(
+        h("span", { class: "w-chmod-label" }, g),
+        ...boxes[gi].map((cb) => h("label", { class: "w-chmod-cell" }, cb)),
+      );
     });
     upd();
     return card(
@@ -7311,7 +10935,7 @@ reg({
         "div",
         { class: "w-chmod-out" },
         h("div", { class: "w-chmod-vals" }, octEl, symEl),
-        copyBtn(() => octEl.textContent),
+        copyBtn(() => octEl.textContent, "copy octal mode"),
       ),
       grid,
     );
@@ -7328,45 +10952,50 @@ reg({
     return null;
   },
   build: ({ shift, text }) => {
-    const input = h("input", { class: "w-input", value: text });
-    const shiftVal = h("span", { class: "w-range-val" }, shift);
-    const shiftIn = h("input", {
-      class: "w-range",
-      type: "range",
+    const input = h("textarea", {
+      class: "w-textarea w-tx-in",
+      rows: "1",
+      placeholder: "type or paste text",
+      "aria-label": "text to shift",
+      spellcheck: "false",
+      autocapitalize: "off",
+    });
+    input.value = text;
+    const shiftNum = h("span");
+    const shiftMap = h("span", { class: "w-slider-aux" });
+    const shiftIn = slider({
       min: "0",
       max: "25",
+      "aria-label": "shift",
       value: ((shift % 26) + 26) % 26,
     });
     const out = h("div", {
-      class: "w-code w-caesar-out",
-      "aria-live": "polite",
+      class: "w-tx-text mono",
+      "data-ph": "the shifted text appears here",
     });
+    const copy = copyBtn(() => out.textContent, "copy result");
     const run = () => {
-      const s = ((+shiftIn.value % 26) + 26) % 26;
-      shiftVal.textContent = s;
+      const s = +shiftIn.value;
+      shiftNum.textContent = s;
+      shiftMap.textContent = `a → ${String.fromCharCode(97 + s)}`;
       out.textContent = input.value.replace(/[a-z]/gi, (c) => {
         const base = c <= "Z" ? 65 : 97;
         return String.fromCharCode(((c.charCodeAt(0) - base + s) % 26) + base);
       });
+      copy.disabled = !out.textContent;
     };
     input.oninput = shiftIn.oninput = run;
     run();
     return card(
       "caesar cipher",
       null,
-      h("label", { class: "w-label col" }, "text", input),
-      h(
-        "label",
-        { class: "w-label w-caesar-shift" },
-        "shift",
-        shiftVal,
-        shiftIn,
-      ),
+      input,
+      sliderField("shift", shiftIn, shiftNum, shiftMap),
       h(
         "div",
-        { class: "w-out-row" },
+        { class: "w-tx-out", role: "status", "aria-live": "polite" },
         out,
-        copyBtn(() => out.textContent),
+        copy,
       ),
     );
   },
@@ -7407,67 +11036,99 @@ reg({
     return null;
   },
   build: ({ ip, cidr }) => {
-    const octs = ip.split(".").map(Number);
-    if (octs.length !== 4 || octs.some((o) => o > 255))
-      return card(
-        "subnet calculator",
-        null,
-        h(
-          "div",
-          { class: "w-note" },
-          "that isn't a valid IPv4 address. try 192.168.1.0/24",
-        ),
-      );
-    const ipNum =
-      ((octs[0] << 24) | (octs[1] << 16) | (octs[2] << 8) | octs[3]) >>> 0;
-    const mask = cidr === 0 ? 0 : (0xffffffff << (32 - cidr)) >>> 0;
-    const network = (ipNum & mask) >>> 0;
-    const broadcast = (network | (~mask >>> 0)) >>> 0;
+    const errId = `w-subnet-err-${Math.random().toString(36).slice(2)}`;
     const toIp = (n) =>
       [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
-    const hosts = cidr >= 31 ? 0 : broadcast - network - 1;
-    const rows = [
-      ["network", toIp(network), true],
-      ["broadcast", toIp(broadcast), true],
-      ["netmask", toIp(mask), true],
-      ["first host", cidr >= 31 ? "—" : toIp(network + 1), true],
-      ["last host", cidr >= 31 ? "—" : toIp(broadcast - 1), true],
-      ["usable hosts", Math.max(0, hosts).toLocaleString(), false],
-    ];
-    return card(
-      `subnet · ${ip}/${cidr}`,
-      null,
+    const input = h("input", {
+      class: "w-input w-mono w-subnet-input",
+      value: `${ip}/${cidr}`,
+      spellcheck: "false",
+      autocomplete: "off",
+      autocapitalize: "off",
+      inputmode: "decimal",
+      "aria-describedby": errId,
+    });
+    const err = h("div", {
+      class: "w-subnet-err",
+      id: errId,
+      role: "status",
+    });
+    const range = h("div", { class: "w-big w-mono w-subnet-range" });
+    const hostsEl = h("div", { class: "w-focal-cap" });
+    const bits = Array.from({ length: 32 }, () => h("i"));
+    const netLegend = h("span", { class: "net" });
+    const hostLegend = h("span");
+    const list = h("div");
+    const result = h(
+      "div",
+      { class: "w-subnet-result" },
       h(
         "div",
         { class: "w-subnet-hero" },
+        range,
+        hostsEl,
         h(
           "div",
-          { class: "w-subnet-range w-mono" },
-          `${toIp(network)}/${cidr}`,
-        ),
-        h(
-          "div",
-          { class: "w-subnet-hosts" },
-          `${Math.max(0, hosts).toLocaleString()} usable hosts`,
-        ),
-      ),
-      h(
-        "div",
-        { class: "w-calc-out" },
-        ...rows.map(([l, v, mono]) =>
-          h(
-            "div",
-            { class: "w-stat" },
-            h("span", { class: "w-stat-label" }, l),
-            h(
-              "span",
-              { class: "w-row" },
-              h("span", { class: `w-stat-val${mono ? " w-mono" : ""}` }, v),
-              copyBtn(() => String(v)),
-            ),
+          { class: "w-subnet-bits", "aria-hidden": "true" },
+          [0, 1, 2, 3].map((o) =>
+            h("div", { class: "w-subnet-oct" }, bits.slice(o * 8, o * 8 + 8)),
           ),
         ),
+        h("div", { class: "w-subnet-legend" }, netLegend, hostLegend),
       ),
+      list,
+    );
+    const run = () => {
+      const m = input.value
+        .trim()
+        .match(/^(\d{1,3}(?:\.\d{1,3}){3})\s*\/\s*(\d{1,2})$/);
+      const octs = m?.[1].split(".").map(Number);
+      const bad = !m
+        ? "enter an IPv4 address with a prefix, like 10.0.0.0/8"
+        : octs.some((o) => o > 255)
+          ? "each part of the address goes from 0 to 255"
+          : +m[2] > 32
+            ? "the prefix goes from /0 to /32"
+            : "";
+      err.textContent = bad;
+      input.setAttribute("aria-invalid", String(!!bad));
+      result.classList.toggle("stale", !!bad);
+      if (bad) return;
+      const c = +m[2];
+      const ipNum =
+        ((octs[0] << 24) | (octs[1] << 16) | (octs[2] << 8) | octs[3]) >>> 0;
+      const mask = c === 0 ? 0 : (0xffffffff << (32 - c)) >>> 0;
+      const network = (ipNum & mask) >>> 0;
+      const broadcast = (network | (~mask >>> 0)) >>> 0;
+      const hosts = c === 32 ? 1 : c === 31 ? 2 : broadcast - network - 1;
+      const first = c >= 31 ? network : network + 1;
+      const last = c >= 31 ? broadcast : broadcast - 1;
+      range.textContent = `${toIp(network)}/${c}`;
+      hostsEl.textContent = `${hosts.toLocaleString()} usable ${hosts === 1 ? "host" : "hosts"}`;
+      for (const [i, b] of bits.entries()) b.classList.toggle("net", i < c);
+      netLegend.textContent = `${c} network ${c === 1 ? "bit" : "bits"}`;
+      hostLegend.textContent = `${32 - c} host ${32 - c === 1 ? "bit" : "bits"}`;
+      list.replaceChildren(
+        kvList(
+          [
+            ["network", toIp(network)],
+            ["broadcast", toIp(broadcast)],
+            ["netmask", toIp(mask)],
+            ["wildcard", toIp(~mask >>> 0)],
+            ["first host", toIp(first)],
+            ["last host", toIp(last)],
+          ].map(([l, v]) => [l, v, { mono: true, copy: true }]),
+        ),
+      );
+    };
+    input.oninput = run;
+    run();
+    return card(
+      "subnet calculator",
+      null,
+      h("label", { class: "w-label col" }, "address and prefix", input),
+      err,
+      result,
     );
   },
 });
@@ -7479,75 +11140,89 @@ reg({
       q.trim(),
     ),
   build: () => {
-    const mode = h(
-      "select",
-      { class: "w-select", "aria-label": "sleep calculator mode" },
-      h("option", { value: "wake" }, "I want to wake up at…"),
-      h("option", { value: "bed" }, "I'm going to bed now"),
+    let wakeMode = true;
+    const seg = segmented(
+      "sleep calculator mode",
+      [
+        ["wake", "wake-up time"],
+        ["bed", "sleep now"],
+      ],
+      "wake",
+      (v) => {
+        wakeMode = v === "wake";
+        run();
+      },
     );
     const timeIn = h("input", {
-      class: "w-input w-num",
+      class: "w-input w-sleep-timein",
       type: "time",
       value: "07:00",
-      "aria-label": "wake-up time",
+      required: true,
     });
-    const timeWrap = h("label", { class: "w-label" }, timeIn);
+    const timeWrap = h(
+      "label",
+      { class: "w-sleep-at" },
+      h("span", null, "wake up at"),
+      timeIn,
+    );
     const hint = h("div", { class: "w-sleep-hint" });
-    const out = h("div", { class: "w-sleep-list" });
     const fmt = (d) =>
-      d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const row = (c, d, best) =>
-      h(
-        "div",
-        { class: `w-sleep-row${best ? " best" : ""}` },
+      d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const cycles = [6, 5, 4];
+    const times = cycles.map(() => h("span", { class: "w-sleep-time" }));
+    const out = h(
+      "div",
+      { class: "w-sleep-list", role: "status", "aria-live": "polite" },
+      ...cycles.map((c, i) =>
         h(
-          "span",
-          { class: "w-sleep-key" },
-          h("span", { class: "w-sleep-cycles" }, `${c} cycles`),
-          h("span", { class: "w-sleep-len" }, `${(c * 1.5).toFixed(1)}h`),
-          best && h("span", { class: "w-sleep-best" }, "recommended"),
+          "div",
+          { class: "w-sleep-row" },
+          times[i],
+          h(
+            "span",
+            { class: "w-sleep-meta" },
+            i === 0 && h("span", { class: "w-sleep-best" }, "recommended"),
+            h(
+              "span",
+              { class: "w-sleep-len" },
+              `${c * 1.5} hours, ${c} cycles`,
+            ),
+          ),
         ),
-        h("span", { class: "w-sleep-time" }, fmt(d)),
-      );
+      ),
+    );
     const run = () => {
-      out.replaceChildren();
-      const cycle = 90,
-        fallAsleep = 15;
-      if (mode.value === "wake") {
-        timeWrap.style.display = "";
-        const [hh, mm] = timeIn.value.split(":").map(Number);
+      timeWrap.hidden = !wakeMode;
+      const [hh, mm] = timeIn.value.split(":").map(Number);
+      const ok = !wakeMode || (Number.isFinite(hh) && Number.isFinite(mm));
+      out.hidden = !ok;
+      if (!ok) {
+        hint.textContent = "pick a wake-up time";
+        return;
+      }
+      const base = (() => {
+        if (!wakeMode) return Date.now();
         const wake = new Date();
         wake.setHours(hh, mm, 0, 0);
         if (wake <= new Date()) wake.setDate(wake.getDate() + 1);
-        hint.textContent = "fall asleep at one of these for full cycles:";
-        for (const c of [6, 5, 4])
-          out.append(
-            row(
-              c,
-              new Date(wake.getTime() - (c * cycle + fallAsleep) * 60000),
-              c === 6,
-            ),
-          );
-      } else {
-        timeWrap.style.display = "none";
-        const now = Date.now();
-        hint.textContent = "wake up at one of these:";
-        for (const c of [6, 5, 4])
-          out.append(
-            row(c, new Date(now + (c * cycle + fallAsleep) * 60000), c === 6),
-          );
-      }
+        return wake.getTime();
+      })();
+      const dir = wakeMode ? -1 : 1;
+      hint.textContent = wakeMode
+        ? "fall asleep at one of these times"
+        : "set an alarm for one of these times";
+      cycles.forEach((c, i) => {
+        numTick(times[i], fmt(new Date(base + dir * (c * 90 + 15) * 60000)));
+      });
     };
-    mode.onchange = run;
     timeIn.oninput = run;
     run();
     return card(
       "sleep calculator",
-      "based on 90-min sleep cycles",
-      h("div", { class: "w-row" }, mode),
+      "90 minute cycles, plus 15 minutes to fall asleep",
+      seg,
       timeWrap,
-      hint,
-      out,
+      h("div", { class: "w-sleep-results" }, hint, out),
     );
   },
 });
@@ -7628,12 +11303,9 @@ const parseTranslateQuery = (q) => {
   return tailLang(t, ["in"]);
 };
 
-////// files //////////////////////////////////////////////////////////////////
-
-const UPLOAD = `<svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 9l5 -5l5 5"/><path d="M12 4v12"/></svg>`;
+const UPLOAD = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/><path d="M7 9l5 -5l5 5"/><path d="M12 4v12"/></svg>`;
 
 const CONV_CHECK = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5l10 -10"/></svg>`;
-const LOCK = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2z"/><path d="M8 11v-4a4 4 0 1 1 8 0v4"/></svg>`;
 
 reg({
   id: "convert",
@@ -7643,23 +11315,31 @@ reg({
     let want = to;
     let busy = false;
     let outUrl = null;
+    let srcUrl = null;
 
-    const picker = h("input", { type: "file", class: "w-drop-input" });
-    const dropText = h("div", { class: "w-drop-text" });
-    const dropHint = h("div", { class: "w-drop-hint" });
-    const drop = h(
-      "label",
-      { class: "w-drop" },
-      picker,
-      h("span", { class: "w-drop-icon", html: UPLOAD }),
-      dropText,
-      dropHint,
+    const tile = (f, url) =>
+      url
+        ? h("img", { class: "w-conv-thumb", src: url, alt: "" })
+        : h("span", { class: "w-conv-tile" }, extOf(f.name).slice(0, 4) || "?");
+
+    const picker = h("input", {
+      type: "file",
+      class: "w-drop-input",
+      "aria-label": "choose a file to convert",
+    });
+    const drop = h("label", { class: "w-drop" }, picker);
+
+    const toSel = h("select", {
+      class: "w-select w-conv-sel",
+      "aria-label": "output format",
+    });
+    const go = h("button", { class: "w-btn", type: "button" }, "convert");
+    const row = h(
+      "div",
+      { class: "w-conv-row" },
+      h("label", { class: "w-conv-to" }, h("span", null, "convert to"), toSel),
+      go,
     );
-
-    const fromChip = h("span", { class: "w-conv-chip" });
-    const toSel = h("select", { class: "w-select w-conv-sel" });
-    const go = h("button", { class: "w-btn primary" }, "convert");
-    const status = h("div", { class: "w-conv-status" });
     const bar = h("i");
     const barWrap = h(
       "div",
@@ -7670,48 +11350,82 @@ reg({
       },
       bar,
     );
+    const status = h("div", { class: "w-conv-status", role: "status" });
     const result = h("div", { class: "w-conv-result" });
+
+    const renderDrop = () => {
+      drop.classList.toggle("has", Boolean(file));
+      if (!file) {
+        drop.replaceChildren(
+          picker,
+          h("span", { class: "w-drop-icon", html: UPLOAD }),
+          h(
+            "span",
+            { class: "w-drop-text" },
+            from ? `drop a .${from} file, or ` : "drop a file, or ",
+            h("span", { class: "w-drop-link" }, "browse"),
+          ),
+          h("span", { class: "w-drop-hint" }, "images, audio and video"),
+        );
+        return;
+      }
+      const ok = Boolean(kindOf(extOf(file.name)));
+      drop.classList.toggle("bad", !ok);
+      drop.replaceChildren(
+        picker,
+        tile(file, srcUrl),
+        h(
+          "span",
+          { class: "w-drop-file" },
+          h("span", { class: "w-drop-name", title: file.name }, file.name),
+          h(
+            "span",
+            { class: "w-drop-meta" },
+            ok
+              ? `${humanSize(file.size)}${file.size > 100 * 1024 * 1024 ? ", this may take a while" : ""}`
+              : `can't convert .${extOf(file.name)} files`,
+          ),
+        ),
+        h("span", { class: "w-drop-change" }, "replace"),
+      );
+    };
 
     const fill = () => {
       const src = file ? extOf(file.name) : from;
-      const targets = src ? targetsFor(src) : [];
-      fromChip.textContent = src ? `.${src}` : "any file";
-      toSel.replaceChildren();
+      const targets = src && kindOf(src) ? targetsFor(src) : [];
+      toSel.replaceChildren(
+        ...targets.map((t) => h("option", { value: t }, `.${t}`)),
+      );
       if (targets.length) {
-        for (const t of targets)
-          toSel.append(h("option", { value: t }, `.${t}`));
         toSel.value = targets.includes(want) ? want : targets[0];
         want = toSel.value;
-        toSel.disabled = false;
-      } else {
-        toSel.append(h("option", { value: "" }, "pick a file first"));
-        toSel.disabled = true;
       }
-      dropText.textContent = from
-        ? `drop a .${from} file, or click to browse`
-        : "drop a file here, or click to browse";
-      dropHint.textContent = "audio, video and images";
-      drop.classList.toggle("has", Boolean(file));
-      go.disabled = busy || !file || !toSel.value;
+      row.hidden = !targets.length;
+      toSel.disabled = busy;
+      const ready = Boolean(file) && targets.length > 0;
+      go.disabled = busy || !ready;
+      go.classList.toggle("primary", ready && !busy && !result.firstChild);
     };
 
     const setFile = (f) => {
-      if (!f) return;
+      if (!f || busy) return;
       file = f;
+      if (srcUrl) URL.revokeObjectURL(srcUrl);
+      srcUrl =
+        kindOf(extOf(f.name)) === "image" && f.size < 40 * 1024 * 1024
+          ? URL.createObjectURL(f)
+          : null;
+      status.textContent = "";
       status.classList.remove("err");
-      if (!kindOf(extOf(f.name))) {
-        status.textContent = `.${extOf(f.name)} is not supported`;
-        status.classList.add("err");
-      } else {
-        const big = f.size > 100 * 1024 * 1024;
-        status.textContent = `${f.name} · ${humanSize(f.size)}${big ? " · this may take a while" : ""}`;
-      }
       result.replaceChildren();
-      go.classList.add("primary");
+      renderDrop();
       fill();
     };
 
-    picker.onchange = () => setFile(picker.files[0]);
+    picker.onchange = () => {
+      setFile(picker.files[0]);
+      picker.value = "";
+    };
     drop.ondragover = (e) => {
       e.preventDefault();
       drop.classList.add("over");
@@ -7727,27 +11441,34 @@ reg({
     };
     toSel.onchange = () => {
       want = toSel.value;
+      if (!result.firstChild) return;
+      result.replaceChildren();
+      fill();
     };
 
     go.onclick = async () => {
       if (busy || !file) return;
       busy = true;
-      go.disabled = true;
-      go.classList.add("primary");
       result.replaceChildren();
       status.classList.remove("err");
+      status.textContent = "starting";
       bar.style.setProperty("--p", "0");
       barWrap.classList.add("on", "indet");
+      fill();
       const target = toSel.value;
+      let phase = "";
 
       try {
         const blob = await convertFile(file, target, {
           onStatus: (s) => {
+            phase = s;
             status.textContent = s;
           },
           onProgress: (p) => {
+            const v = Math.min(1, Math.max(0, p));
             barWrap.classList.remove("indet");
-            bar.style.setProperty("--p", String(Math.min(1, Math.max(0, p))));
+            bar.style.setProperty("--p", String(v));
+            status.textContent = `${phase || "converting"}, ${Math.round(v * 100)}%`;
           },
         });
         const name = `${file.name.replace(/\.[^.]+$/, "")}.${outExtFor(target)}`;
@@ -7760,20 +11481,17 @@ reg({
           "download",
         );
         result.append(
-          ...[
-            kindOf(target) === "image"
-              ? h("img", { class: "w-conv-thumb", src: outUrl, alt: "" })
-              : h("span", { class: "w-conv-check", html: CONV_CHECK }),
-            h(
-              "div",
-              { class: "w-conv-meta" },
-              h("div", { class: "w-conv-name" }, name),
-              h("div", { class: "w-conv-size" }, humanSize(blob.size)),
-            ),
-            dl,
-          ],
+          kindOf(target) === "image"
+            ? h("img", { class: "w-conv-thumb", src: outUrl, alt: "" })
+            : h("span", { class: "w-conv-check", html: CONV_CHECK }),
+          h(
+            "div",
+            { class: "w-conv-meta" },
+            h("div", { class: "w-conv-name", title: name }, name),
+            h("div", { class: "w-conv-size" }, humanSize(blob.size)),
+          ),
+          dl,
         );
-        go.classList.remove("primary");
         dl.click();
       } catch (e) {
         status.textContent = String(e?.message || e).slice(0, 200);
@@ -7785,172 +11503,217 @@ reg({
       }
     };
 
+    renderDrop();
     fill();
 
-    return h(
-      "section",
-      { class: "rich-result w w-conv" },
-      drop,
-      h(
-        "div",
-        { class: "w-conv-bottom" },
-        h(
-          "div",
-          { class: "w-conv-row" },
-          fromChip,
-          h("span", { class: "w-conv-arrow" }, "→"),
-          toSel,
-          go,
-        ),
-        barWrap,
-        status,
-        result,
-        h(
-          "div",
-          { class: "w-conv-note" },
-          h("span", { html: LOCK }),
-          "converted on your device, nothing is uploaded",
-        ),
-      ),
+    return card(
+      "file converter",
+      "converted on your device, nothing is uploaded",
+      h("div", { class: "w-conv" }, drop, row, barWrap, status, result),
     );
   },
 });
 
 const CLEAR = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
 
+const CHEVRON_DOWN = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6l6 -6"/></svg>`;
+
 reg({
   id: "currency",
   match: parseCurrencyQuery,
   build: ({ amount, from, to }) => {
-    const fmtNum = (n, dp) =>
-      new Intl.NumberFormat(undefined, {
+    const fmt = (n, dp) =>
+      new Intl.NumberFormat("en-US", {
         minimumFractionDigits: dp,
         maximumFractionDigits: dp,
       }).format(n);
     const fmtAmt = (n) => {
       const abs = Math.abs(n);
-      const dp = abs >= 1 || n === 0 ? 2 : abs >= 0.01 ? 4 : 6;
-      return fmtNum(n, dp);
+      return fmt(n, abs >= 1 || n === 0 ? 2 : abs >= 0.01 ? 4 : 6);
     };
     const fmtRate = (n) =>
-      new Intl.NumberFormat(undefined, {
-        maximumFractionDigits: n >= 1 ? 4 : 6,
+      new Intl.NumberFormat("en-US", {
+        maximumSignificantDigits: 6,
+        maximumFractionDigits: n >= 1 ? 4 : 8,
       }).format(n);
+    const parse = (s) => {
+      const t = s.replace(/[,\s]/g, "");
+      if (!t) return null;
+      const n = Number(t);
+      return Number.isFinite(n) && n >= 0 ? n : Number.NaN;
+    };
 
-    const amt = h("input", {
-      class: "w-input w-cur-amt",
-      type: "text",
-      inputmode: "decimal",
-      value: String(amount),
-    });
-    const fromSel = h("select", { class: "w-select w-cur-sel" });
-    const toSel = h("select", { class: "w-select w-cur-sel" });
+    const side = (name, code) => {
+      const input = h("input", {
+        class: "w-cur-amt",
+        type: "text",
+        inputmode: "decimal",
+        autocomplete: "off",
+        spellcheck: "false",
+        "aria-label": `${name} amount`,
+      });
+      const sel = h(
+        "select",
+        { class: "w-cur-sel", "aria-label": `${name} currency`, disabled: "" },
+        h("option", { value: code }, currencyLabel(code)),
+      );
+      const label = h("span", { class: "w-cur-code" }, code);
+      const row = h(
+        "div",
+        { class: "w-cur-row" },
+        input,
+        h(
+          "span",
+          { class: "w-cur-pick" },
+          label,
+          h("span", { class: "w-cur-chev", html: CHEVRON_DOWN }),
+          sel,
+        ),
+      );
+      return { input, sel, row, code: label };
+    };
+
+    const a = side("from", from);
+    const b = side("to", to);
+    a.input.value = String(amount);
+    b.row.classList.add("wait");
+    b.row.prepend(h("span", { class: "w-cur-skel", "aria-hidden": "true" }));
+
     const swap = h("button", {
       class: "w-cur-swap",
       type: "button",
       title: "swap currencies",
       "aria-label": "swap currencies",
+      disabled: "",
       html: SWAP,
     });
-    const result = h("div", { class: "w-big w-cur-result" }, "loading rates…");
-    const rateLine = h("div", { class: "w-sub w-cur-rate" });
-    const stamp = h("div", { class: "w-cur-stamp" });
+    const rateLine = h("div", { class: "w-cur-rate" });
+    const msg = h("div", { class: "w-cur-msg", role: "status" });
+    const retry = h(
+      "button",
+      { class: "w-cur-retry", type: "button" },
+      "try again",
+    );
+    const fail = h(
+      "div",
+      { class: "w-cur-fail", role: "alert", hidden: "" },
+      h("span", null, "couldn't load exchange rates"),
+      retry,
+    );
 
     let rates = null;
-    let lastValue = 0;
-    const recompute = () => {
+    let anchor = "a";
+
+    const recompute = (flash = false) => {
       if (!rates) return;
-      const a = parseFloat(amt.value.replace(/,/g, ""));
-      const f = fromSel.value;
-      const tt = toSel.value;
-      if (!Number.isFinite(a) || !rates[f] || !rates[tt]) {
-        result.textContent = "—";
-        rateLine.textContent = "";
-        lastValue = 0;
-        return;
-      }
-      const rate = rates[tt] / rates[f];
-      lastValue = a * rate;
-      result.replaceChildren(
-        h("span", { class: "w-cur-out" }, fmtAmt(lastValue)),
-        " ",
-        h("span", { class: "w-cur-code" }, tt),
-      );
-      rateLine.textContent = `${fmtAmt(a)} ${f} · 1 ${f} = ${fmtRate(rate)} ${tt}`;
+      const [src, dst] = anchor === "a" ? [a, b] : [b, a];
+      const f = a.sel.value;
+      const t = b.sel.value;
+      const rate = rates[t] / rates[f];
+      a.code.textContent = f;
+      b.code.textContent = t;
+      a.sel.title = currencyLabel(f);
+      b.sel.title = currencyLabel(t);
+      rateLine.textContent = `1 ${f} = ${fmtRate(rate)} ${t}`;
+      const n = parse(src.input.value);
+      const bad = Number.isNaN(n);
+      src.row.classList.toggle("bad", bad);
+      dst.row.classList.remove("bad");
+      if (bad) src.input.setAttribute("aria-invalid", "true");
+      else src.input.removeAttribute("aria-invalid");
+      dst.input.removeAttribute("aria-invalid");
+      msg.textContent = bad ? "enter a number, like 12.50" : "";
+      dst.input.value =
+        n == null || bad ? "" : fmtAmt(anchor === "a" ? n * rate : n / rate);
+      if (!flash || calmMotion()) return;
+      dst.input.animate([{ opacity: 0.35 }, { opacity: 1 }], {
+        duration: 180,
+        easing: "cubic-bezier(0.23, 1, 0.32, 1)",
+      });
     };
 
-    amt.oninput = recompute;
-    fromSel.onchange = toSel.onchange = recompute;
-    let turns = 0;
-    swap.onclick = () => {
-      const f = fromSel.value;
-      fromSel.value = toSel.value;
-      toSel.value = f;
-      turns += 1;
-      swap.style.setProperty("--turn", `${turns * 180}deg`);
+    a.input.oninput = () => {
+      anchor = "a";
       recompute();
     };
+    b.input.oninput = () => {
+      anchor = "b";
+      recompute();
+    };
+    a.sel.onchange = b.sel.onchange = () => recompute(true);
 
-    fetch("/fx/USD")
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((data) => {
-        rates = data.rates || {};
-        const codes = sortCodes(Object.keys(rates));
-        const opts = (sel, val) => {
-          sel.replaceChildren(
-            ...codes.map((c) =>
-              h(
-                "option",
-                { value: c, selected: c === val ? "" : null },
-                currencyLabel(c),
-              ),
-            ),
-          );
-          if (rates[val]) sel.value = val;
-        };
-        opts(fromSel, rates[from] ? from : "USD");
-        opts(toSel, rates[to] ? to : "EUR");
-        if (data.updated)
-          stamp.textContent = `rates updated ${new Date(data.updated * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
-        recompute();
-      })
-      .catch(() => {
-        result.textContent = "couldn't load exchange rates";
-      });
+    let turns = 0;
+    swap.onclick = () => {
+      if (!rates) return;
+      const f = a.sel.value;
+      a.sel.value = b.sel.value;
+      b.sel.value = f;
+      if (anchor === "b") {
+        a.input.value = b.input.value;
+        anchor = "a";
+      }
+      turns += 1;
+      swap.style.setProperty("--turn", `${turns * 180}deg`);
+      recompute(true);
+    };
 
-    return card(
+    const section = card(
       "currency converter",
       "live mid-market rates",
       h(
         "div",
-        { class: "w-cur-duo" },
-        h(
-          "div",
-          { class: "w-cur-side" },
-          h("div", { class: "w-cur-side-label" }, "from"),
-          amt,
-          fromSel,
-        ),
-        swap,
-        h(
-          "div",
-          { class: "w-cur-side" },
-          h("div", { class: "w-cur-side-label" }, "to"),
-          h(
-            "div",
-            { class: "w-out-row w-cur-out-row" },
-            result,
-            copyBtn(
-              () => (lastValue ? String(+lastValue.toFixed(6)) : ""),
-              "copy result",
-            ),
-          ),
-          toSel,
-        ),
+        { class: "w-cur-box" },
+        h("div", { class: "w-cur-grid" }, a.row, swap, b.row),
       ),
+      msg,
       rateLine,
-      stamp,
+      fail,
     );
+    const sub = section.querySelector(".w-sub");
+
+    const load = () => {
+      fail.hidden = true;
+      rateLine.hidden = false;
+      b.row.classList.add("wait");
+      fetch("/fx/USD")
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((data) => {
+          if (!data?.rates?.USD) throw new Error("no rates");
+          rates = data.rates;
+          const codes = sortCodes(Object.keys(rates));
+          for (const [s, want, fallback] of [
+            [a, from, "USD"],
+            [b, to, "EUR"],
+          ]) {
+            s.sel.replaceChildren(
+              ...codes.map((c) => h("option", { value: c }, currencyLabel(c))),
+            );
+            s.sel.value = rates[want] ? want : fallback;
+            s.sel.disabled = false;
+          }
+          swap.disabled = false;
+          b.row.classList.remove("wait");
+          if (data.updated && sub)
+            sub.textContent = `mid-market rates, updated ${new Date(
+              data.updated * 1000,
+            ).toLocaleString(undefined, {
+              month: "short",
+              day: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })}`;
+          recompute();
+        })
+        .catch(() => {
+          b.row.classList.remove("wait");
+          rateLine.hidden = true;
+          fail.hidden = false;
+        });
+    };
+    retry.onclick = load;
+    load();
+
+    return section;
   },
 });
 
@@ -7981,14 +11744,45 @@ reg({
     const count = h("span", { class: "w-tr-count" });
     const dict = h("div", { class: "w-tr-dict" });
 
+    let firstOut = true;
     const setOut = (value) => {
+      out.classList.remove("stale", "fresh");
+      out.removeAttribute("aria-busy");
       if (value == null)
-        out.replaceChildren(h("span", { class: "w-tr-ph" }, "translation"));
-      else out.textContent = value;
+        return out.replaceChildren(
+          h("span", { class: "w-tr-ph" }, "translation"),
+        );
+      out.textContent = value;
+      if (firstOut) {
+        firstOut = false;
+        return;
+      }
+      out.offsetWidth;
+      out.classList.add("fresh");
+    };
+    const setLoading = () => {
+      out.setAttribute("aria-busy", "true");
+      if (
+        out.textContent &&
+        !out.classList.contains("err") &&
+        !out.querySelector(".w-tr-ph, .w-tr-skel")
+      )
+        return out.classList.add("stale");
+      out.classList.remove("err", "fresh");
+      out.replaceChildren(
+        h("span", { class: "w-tr-skel" }),
+        h("span", { class: "w-tr-skel" }),
+      );
     };
     const syncCount = () => {
-      count.textContent = `${src.value.length} / 5000`;
+      count.textContent = `${src.value.length.toLocaleString("en-US")} / 5,000`;
+      duo.classList.toggle("short", src.value.length <= 80);
+      clear.hidden = !src.value;
     };
+    const outText = () =>
+      out.classList.contains("err") || out.querySelector(".w-tr-ph, .w-tr-skel")
+        ? ""
+        : out.textContent;
     const clearExtras = () => {
       srcTl.textContent = "";
       outTl.textContent = "";
@@ -8101,6 +11895,7 @@ reg({
       }
       ctrl = new AbortController();
       status.textContent = "translating…";
+      setLoading();
       try {
         const data = await requestTranslation(
           {
@@ -8149,8 +11944,16 @@ reg({
         if (word) renderDict(word.toLowerCase());
       } catch (e) {
         if (e.name === "AbortError") return;
-        setOut(e.message || "translation failed");
+        setOut(null);
         out.classList.add("err");
+        out.replaceChildren(
+          h("span", null, e.message || "translation failed"),
+          h(
+            "button",
+            { class: "w-tr-retry", type: "button", onclick: () => run() },
+            "try again",
+          ),
+        );
         status.textContent = "";
       }
     };
@@ -8172,8 +11975,7 @@ reg({
       const to = tlP.value;
       slP.value = to;
       tlP.value = from;
-      if (!out.classList.contains("err") && !out.querySelector(".w-tr-ph"))
-        src.value = out.textContent.slice(0, 5000);
+      if (outText()) src.value = outText().slice(0, 5000);
       turns += 1;
       swap.style.setProperty("--turn", `${turns * 180}deg`);
       duo.classList.remove("swapping");
@@ -8184,7 +11986,7 @@ reg({
     };
 
     const clear = h("button", {
-      class: "w-copy",
+      class: "w-copy w-tr-clear",
       type: "button",
       title: "clear",
       "aria-label": "clear text",
@@ -8204,6 +12006,7 @@ reg({
         src,
         srcTl,
         dym,
+        clear,
         h(
           "div",
           { class: "w-tr-pane-foot" },
@@ -8213,24 +12016,19 @@ reg({
             "w-copy",
           ),
           count,
-          clear,
         ),
       ),
       h(
         "div",
-        { class: "w-tr-pane" },
+        { class: "w-tr-pane out" },
         out,
         outTl,
         h(
           "div",
           { class: "w-tr-pane-foot" },
-          speakButton(
-            () => (out.querySelector(".w-tr-ph") ? "" : out.textContent),
-            () => tlP.value,
-            "w-copy",
-          ),
+          speakButton(outText, () => tlP.value, "w-copy"),
           status,
-          copyBtn(() => (out.querySelector(".w-tr-ph") ? "" : out.textContent)),
+          copyBtn(outText),
         ),
       ),
     );
@@ -8266,7 +12064,6 @@ reg({
     );
   },
 });
-////// engine //////////////////////////////////////////////////////////////////
 
 export function renderLocalWidgets(query) {
   if (!query) return null;

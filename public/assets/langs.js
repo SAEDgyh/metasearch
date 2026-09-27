@@ -229,6 +229,7 @@ export function makeLangPicker({ value, detect = false, onChange }) {
   const btn = el("button", "lp-btn");
   btn.type = "button";
   btn.setAttribute("aria-haspopup", "listbox");
+  btn.setAttribute("aria-expanded", "false");
   const label = el("span", "lp-label");
   const chev = el("span", "lp-chevron", CHEVRON);
 
@@ -254,7 +255,7 @@ export function makeLangPicker({ value, detect = false, onChange }) {
           "lp-name",
           detected
             ? `${langName(detected)} <span class="lp-hint">· detected</span>`
-            : "detect language",
+            : `detect<span class="lp-tail"> language</span>`,
         ),
       );
     } else {
@@ -330,6 +331,7 @@ export function makeLangPicker({ value, detect = false, onChange }) {
     if (!open) return;
     open = false;
     root.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
     document.removeEventListener("pointerdown", onDocDown, true);
   };
 
@@ -342,6 +344,7 @@ export function makeLangPicker({ value, detect = false, onChange }) {
     buildList();
     open = true;
     root.classList.add("open");
+    btn.setAttribute("aria-expanded", "true");
     search.value = "";
     filter();
     for (const i of items)
@@ -491,7 +494,7 @@ export async function requestTranslation(payload, signal) {
       data?.error ||
         (res.status === 429
           ? "too many translations, wait a moment"
-          : "translation failed, try again"),
+          : "translation failed"),
     );
   return data;
 }

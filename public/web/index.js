@@ -1221,7 +1221,6 @@
       box.append(showMore);
 
       setTimeout(async () => {
-        console.log(questionEl.scrollHeight);
         if (questionEl.scrollHeight < 480) {
           showMore.remove();
           questionEl.classList.add("expanded");
@@ -1319,13 +1318,15 @@
         const toggleBtn = document.createElement("button");
         toggleBtn.className = "infobox-toggle";
         toggleBtn.textContent = "show more";
+        toggleBtn.setAttribute("aria-expanded", "false");
         toggleBtn.onclick = () => {
           const expanded = !attrsContainer.classList.contains("expanded");
           toggleBtn.textContent = expanded ? "show less" : "show more";
+          toggleBtn.setAttribute("aria-expanded", String(expanded));
           animateResize(
             attrsContainer,
             () => attrsContainer.classList.toggle("expanded"),
-            { deferCollapse: true },
+            { deferCollapse: true, duration: 380 },
           );
         };
         const wrap = document.createElement("div");
@@ -1408,17 +1409,17 @@
 
   const richCopyBtn = (getText, title = "copy") => {
     const btn = document.createElement("button");
+    btn.type = "button";
     btn.className = "rich-copy-btn";
     btn.title = title;
-    btn.innerHTML = COPY_SVG;
+    btn.setAttribute("aria-label", title);
+    btn.innerHTML = `<span class="rich-copy-icon">${COPY_SVG}</span><span class="rich-copy-icon check">${CHECK_SVG}</span>`;
+    let timer;
     btn.onclick = () => {
-      navigator.clipboard?.writeText(getText());
-      btn.innerHTML = CHECK_SVG;
+      navigator.clipboard?.writeText(getText())?.catch(() => {});
       btn.classList.add("copied");
-      setTimeout(() => {
-        btn.innerHTML = COPY_SVG;
-        btn.classList.remove("copied");
-      }, 1400);
+      clearTimeout(timer);
+      timer = setTimeout(() => btn.classList.remove("copied"), 1400);
     };
     return btn;
   };
@@ -1462,7 +1463,13 @@
         expr.textContent = item.calculator.expression;
         const answer = document.createElement("div");
         answer.className = "rich-calc-answer";
-        answer.textContent = `= ${item.calculator.answer}`;
+        const ans = item.calculator.answer;
+        answer.textContent = `= ${
+          typeof ans === "number" &&
+          (ans === 0 || (Math.abs(ans) < 1e15 && Math.abs(ans) >= 1e-6))
+            ? ans.toLocaleString("en", { maximumFractionDigits: 10 })
+            : ans
+        }`;
         section.append(
           expr,
           answer,
@@ -1489,41 +1496,29 @@
         const info = document.createElement("div");
         info.className = "rich-color-info";
 
+        const rows = ["hex", "rgb", "hsl"].map((name) => {
+          const row = document.createElement("div");
+          row.className = "rich-color-row";
+          const label = document.createElement("span");
+          label.className = "rich-color-label";
+          label.textContent = name;
+          const value = document.createElement("span");
+          value.className = "rich-color-value";
+          const copyBtn = richCopyBtn(() => value.textContent, `copy ${name}`);
+          copyBtn.classList.add("rich-color-copy");
+          row.append(label, value, copyBtn);
+          info.append(row);
+          return value;
+        });
+
         const updateColorDisplay = (color) => {
           const rgb = hexToRgb(color);
           if (!rgb) return;
           const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
-
-          info.innerHTML = "";
-          const formats = [
-            { label: "HEX", value: color.toUpperCase() },
-            { label: "RGB", value: `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})` },
-            { label: "HSL", value: `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)` },
-          ];
-
-          for (const fmt of formats) {
-            const row = document.createElement("div");
-            row.className = "rich-color-row";
-            const label = document.createElement("span");
-            label.className = "rich-color-label";
-            label.textContent = fmt.label;
-            const value = document.createElement("span");
-            value.className = "rich-color-value";
-            value.textContent = fmt.value;
-            const copyBtn = document.createElement("button");
-            copyBtn.className = "rich-color-copy";
-            copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"/><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1"/></svg>`;
-            copyBtn.title = "Copy";
-            copyBtn.onclick = () => {
-              navigator.clipboard.writeText(fmt.value);
-              copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5l10 -10"/></svg>`;
-              setTimeout(() => {
-                copyBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667z"/><path d="M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1"/></svg>`;
-              }, 1500);
-            };
-            row.append(label, value, copyBtn);
-            info.append(row);
-          }
+          const [hexEl, rgbEl, hslEl] = rows;
+          hexEl.textContent = color.toUpperCase();
+          rgbEl.textContent = `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+          hslEl.textContent = `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
         };
 
         colorInput.addEventListener("input", (e) => {
@@ -1612,6 +1607,7 @@
             dayName.className = "rich-weather-dayname";
             const d = new Date(day.ts * 1000);
             const isToday = d.toDateString() === new Date().toDateString();
+            if (isToday) dayEl.classList.add("today");
             dayName.textContent = isToday
               ? "today"
               : d.toLocaleDateString("en", { weekday: "short" });
@@ -1629,6 +1625,7 @@
             const dayDesc = document.createElement("span");
             dayDesc.className = "rich-weather-daydesc";
             dayDesc.textContent = day.weather?.main || "";
+            dayDesc.title = dayDesc.textContent;
             dayEl.append(dayName, dayIcon, dayTemp, dayDesc);
             forecast.append(dayEl);
           }
@@ -1695,7 +1692,7 @@
         const playPauseBtn = document.createElement("button");
         playPauseBtn.className = "rich-timer-btn";
         const resetBtn = document.createElement("button");
-        resetBtn.className = "rich-timer-btn";
+        resetBtn.className = "rich-timer-btn secondary";
         resetBtn.textContent = "reset";
 
         let doNotify;
@@ -1845,6 +1842,7 @@
 
         const pause = () => {
           isRunning = false;
+          section.dataset.state = "paused";
           playPauseBtn.textContent = "resume";
           clearInterval(intervalId);
           playTick();
@@ -1952,6 +1950,7 @@
             tz.converted_time?.city?.name ||
             tz.converted_time?.location ||
             tz.abbreviation;
+          tzLoc.title = tzLoc.textContent;
           const tzOffset = document.createElement("span");
           tzOffset.className = "rich-tz-offset";
           tzOffset.textContent =
@@ -2176,8 +2175,9 @@
         playPauseBtn.textContent = "start";
 
         const lapResetBtn = document.createElement("button");
-        lapResetBtn.className = "rich-timer-btn";
+        lapResetBtn.className = "rich-timer-btn secondary";
         lapResetBtn.textContent = "reset";
+        section.dataset.state = "idle";
 
         const lapsContainer = document.createElement("div");
         lapsContainer.className = "rich-stopwatch-laps";
@@ -2201,6 +2201,7 @@
 
         const start = () => {
           isRunning = true;
+          section.dataset.state = "running";
           playPauseBtn.textContent = "pause";
           lapResetBtn.textContent = "lap";
           intervalId = setInterval(tick, 10);
@@ -2208,6 +2209,7 @@
 
         const pause = () => {
           isRunning = false;
+          section.dataset.state = "paused";
           playPauseBtn.textContent = "resume";
           lapResetBtn.textContent = "reset";
           clearInterval(intervalId);
@@ -2218,6 +2220,7 @@
           isRunning = false;
           elapsed = 0;
           lapTimes = [];
+          section.dataset.state = "idle";
           playPauseBtn.textContent = "start";
           lapResetBtn.textContent = "reset";
           lapsContainer.innerHTML = "";
@@ -2225,10 +2228,11 @@
         };
 
         const lap = () => {
+          const split = elapsed - (lapTimes.at(-1) ?? 0);
           lapTimes.push(elapsed);
           const lapEl = document.createElement("div");
           lapEl.className = "rich-stopwatch-lap";
-          lapEl.innerHTML = `<b>lap ${lapTimes.length}:</b> <span>${formatTime(elapsed)}</span>`;
+          lapEl.innerHTML = `<b>lap ${lapTimes.length}</b><span class="rich-stopwatch-split">+${formatTime(split)}</span><span>${formatTime(elapsed)}</span>`;
           lapsContainer.prepend(lapEl);
         };
 
@@ -2473,24 +2477,27 @@
     wrap.append(lyricsEl);
     el.append(wrap);
 
-    requestAnimationFrame(() => {
-      if (lyricsEl.scrollHeight <= wrap.clientHeight + 5) {
-        wrap.classList.remove("rich-genius-collapsed");
-        return;
-      }
-      const toggle = document.createElement("button");
-      toggle.type = "button";
-      toggle.className = "rich-genius-toggle";
-      toggle.textContent = "show full lyrics";
-      toggle.onclick = () => {
-        let collapsed;
-        animateResize(wrap, () => {
-          collapsed = wrap.classList.toggle("rich-genius-collapsed");
+    if (lyricsEl.scrollHeight <= wrap.clientHeight + 5) {
+      wrap.classList.remove("rich-genius-collapsed");
+      return;
+    }
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "rich-genius-toggle";
+    toggle.textContent = "show full lyrics";
+    toggle.onclick = () => {
+      animateResize(
+        wrap,
+        () => {
+          const collapsed = wrap.classList.toggle("rich-genius-collapsed");
           toggle.textContent = collapsed ? "show full lyrics" : "show less";
-        });
-      };
-      el.append(toggle);
-    });
+          toggle.setAttribute("aria-expanded", String(!collapsed));
+        },
+        { duration: 420 },
+      );
+    };
+    toggle.setAttribute("aria-expanded", "false");
+    el.append(toggle);
   };
 
   const showGeniusInstantAnswer = () => {
@@ -2511,21 +2518,45 @@
 
     const placeholder = document.createElement("section");
     placeholder.className = "rich-result rich-genius rich-genius-loading";
-
-    const spinner = document.createElement("div");
-    spinner.className = "rich-genius-spinner";
-    spinner.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M12 3a9 9 0 1 0 9 9"/></svg><span>loading lyrics from genius…</span>`;
-    placeholder.append(spinner);
+    placeholder.setAttribute("aria-busy", "true");
+    placeholder.setAttribute("aria-label", "loading lyrics from genius");
+    placeholder.innerHTML = `<div class="rich-genius-header"><span class="sk rich-genius-art"></span><div class="rich-genius-meta"><span class="sk sk-eyebrow"></span><span class="sk sk-title"></span><span class="sk sk-artist"></span></div></div><div class="rich-genius-sk-lines"><span class="sk sk-line"></span><span class="sk sk-line sk-short"></span><span class="sk sk-line"></span><span class="sk sk-line sk-mid"></span></div>`;
 
     document.getElementById("results-all").prepend(placeholder);
+
+    const dismiss = () => {
+      if (reducedMotion) return placeholder.remove();
+      placeholder.style.overflow = "hidden";
+      placeholder
+        .animate(
+          [
+            { opacity: 1, height: `${placeholder.offsetHeight}px` },
+            {
+              opacity: 0,
+              height: "0px",
+              paddingTop: "0px",
+              paddingBottom: "0px",
+              marginBottom: "0px",
+            },
+          ],
+          { duration: 220, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
+        )
+        .finished.finally(() => placeholder.remove());
+    };
 
     fetch(`/g?u=${encodeURIComponent(firstResult.url)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((d) => {
-        if (d?.lyrics) renderGenius(placeholder, d, firstResult.url);
-        else placeholder.remove();
+        if (!d?.lyrics) return dismiss();
+        placeholder.removeAttribute("aria-busy");
+        placeholder.removeAttribute("aria-label");
+        animateResize(
+          placeholder,
+          () => renderGenius(placeholder, d, firstResult.url),
+          { duration: 380 },
+        );
       })
-      .catch(() => placeholder.remove());
+      .catch(dismiss);
   };
 
   const renderAllTab = () => {
@@ -2745,8 +2776,10 @@
       }, 1000);
     });
   } else {
-    document.getElementById("results-all").append(renderAllTab());
-    document.getElementById("sidebar").append(renderSidebar());
+    const mainFrag = renderAllTab();
+    const sideFrag = renderSidebar();
+    document.getElementById("results-all").append(mainFrag);
+    document.getElementById("sidebar").append(sideFrag);
     showGeniusInstantAnswer();
 
     const r = data.results;
@@ -2838,20 +2871,18 @@
         if (!newData.results?.web?.results?.length) {
           const endEl = document.createElement("div");
           endEl.className = "end-of-results";
-          endEl.textContent = "No more results";
+          endEl.textContent = "no more results";
           document.getElementById("results-all").append(endEl);
         }
         return;
       }
 
-      const resultsContainer = document.getElementById("results-all");
       const webResults = newData.results.web.results;
-
-      for (const r of webResults) {
-        resultsContainer.append(
-          renderWebResult(r, newData.engine || data.engine),
-        );
-      }
+      const batch = document.createDocumentFragment();
+      for (const r of webResults)
+        batch.append(renderWebResult(r, newData.engine || data.engine));
+      loadingEl.classList.remove("visible");
+      document.getElementById("results-all").append(batch);
 
       hasMoreResults =
         newData.more_results_available !== false && webResults.length > 0;
