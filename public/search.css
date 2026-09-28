@@ -232,9 +232,8 @@ header .search-container .search-bar {
     box-shadow var(--duration-slow) var(--ease-out);
 
   &:has(input:focus) {
-    outline: none;
-    border-color: color-mix(in srgb, var(--blue) 45%, #bac2de);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 16%, transparent);
+    border-color: #bac2de;
+    outline: rgb(186, 194, 222) 0.5px solid;
   }
 }
 
@@ -4368,16 +4367,11 @@ body.images-detail-sidebar-open .images-body {
 .w-textarea:focus,
 .w-select:focus {
   outline: none;
-  border-color: var(--blue);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent);
+  border-color: var(--subtext);
 }
 .w-input[aria-invalid="true"],
 .w-textarea[aria-invalid="true"] {
   border-color: var(--red);
-}
-.w-input[aria-invalid="true"]:focus,
-.w-textarea[aria-invalid="true"]:focus {
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--red) 18%, transparent);
 }
 .w-select:disabled {
   opacity: 0.55;
@@ -5157,15 +5151,11 @@ body.images-detail-sidebar-open .images-body {
   }
 }
 .w-cur-row:focus-within {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent);
+  border-color: var(--subtext);
 }
 .w-cur-row.bad,
 .w-cur-row.bad:hover {
   border-color: var(--red);
-}
-.w-cur-row.bad:focus-within {
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--red) 18%, transparent);
 }
 .w-cur-amt {
   flex: 1;
@@ -6425,8 +6415,7 @@ body.images-detail-sidebar-open .images-body {
     box-shadow var(--duration-slow) var(--ease-out);
 }
 .w-contrast-pick:has(.w-contrast-hex:focus) {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent);
+  border-color: var(--subtext);
 }
 .w-contrast-pick:has(.w-contrast-hex[aria-invalid="true"]) {
   border-color: var(--red);
@@ -9553,9 +9542,7 @@ body.images-detail-sidebar-open .images-body {
   transition: box-shadow var(--duration-base) var(--ease-out);
 }
 .w-typing-prompt.focus {
-  box-shadow:
-    inset 0 0 0 1px var(--blue),
-    0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--subtext);
 }
 .w-typing-prompt.done {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 60%, var(--line));
@@ -10634,8 +10621,7 @@ body.images-detail-sidebar-open .images-body {
   border-color: color-mix(in srgb, var(--red) 45%, var(--line));
 }
 .w-dev-panel:has(.w-dev-edit:focus-visible) {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent);
+  border-color: var(--subtext);
 }
 @media (hover: hover) {
   .w-dev-panel:has(.w-dev-edit):hover:not(:has(.w-dev-edit:focus-visible)) {
@@ -10835,8 +10821,7 @@ body.images-detail-sidebar-open .images-body {
   }
 }
 .w-rx-field:focus-within {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent);
+  border-color: var(--subtext);
 }
 .w-rx-field.err {
   border-color: color-mix(in srgb, var(--red) 45%, var(--line));
