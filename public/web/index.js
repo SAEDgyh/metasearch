@@ -1,4 +1,5 @@
 (() => {
+  const PROXY_BASE = "https://shy-meadow-f405.kosgoodporn.workers.dev/";
   let isLoading, hasHadWebResult, firstWebThumb;
   const currentQuery = new URLSearchParams(window.location.search).get("q");
 
@@ -12,7 +13,7 @@
     try {
       const parsed = new URL(url);
       if (parsed.protocol === "http:" || parsed.protocol === "https:")
-        return url;
+        return PROXY_BASE + url;
     } catch {}
     return "#";
   };
